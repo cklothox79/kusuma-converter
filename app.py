@@ -1,65 +1,96 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import requests
-from geopy.geocoders import Nominatim
-from streamlit_folium import st_folium
-import folium
+import json
+from datetime import datetime
+from pathlib import Path
 
-st.set_page_config(page_title="Prakiraan Cuaca BMKG", layout="wide")
+# -----------------------------
+# 1️⃣  Load daftar wilayah
+# -----------------------------
+csv_path = Path("data/kode_wilayah.csv")
+df_wilayah = pd.read_csv(csv_path)
 
-# --- 1. Load CSV kode wilayah ---
-@st.cache_data
-def load_kode_wilayah():
-    # Pastikan kolom bernama 'kode' dan 'nama'
-    df = pd.read_csv("data/kode_wilayah.csv", dtype=str)
-    df.columns = [c.lower() for c in df.columns]
-    return df
+st.title("🌦️ Prakiraan Cuaca – BMKG")
 
-kode_df = load_kode_wilayah()
+# Pilih wilayah
+prov = st.selectbox("Pilih Provinsi", sorted(df_wilayah['provinsi'].unique()))
+kab  = st.selectbox("Pilih Kabupaten/Kota",
+                    sorted(df_wilayah[df_wilayah['provinsi']==prov]['kabupaten/kota'].unique()))
+kec  = st.selectbox("Pilih Kecamatan",
+                    sorted(df_wilayah[(df_wilayah['provinsi']==prov)&
+                                      (df_wilayah['kabupaten/kota']==kab)]['kecamatan'].unique()))
+desa = st.selectbox("Pilih Desa/Kelurahan",
+                    sorted(df_wilayah[(df_wilayah['provinsi']==prov)&
+                                      (df_wilayah['kabupaten/kota']==kab)&
+                                      (df_wilayah['kecamatan']==kec)]['desa'].unique()))
 
-# --- 2. Input lokasi ---
-lokasi = st.text_input("Masukkan Nama Desa/Kota", "Simogirang, Sidoarjo")
+kode = df_wilayah[(df_wilayah['provinsi']==prov)&
+                  (df_wilayah['kabupaten/kota']==kab)&
+                  (df_wilayah['kecamatan']==kec)&
+                  (df_wilayah['desa']==desa)]['kode'].values[0]
 
-# --- 3. Geocoding ---
-if lokasi:
-    try:
-        geolocator = Nominatim(user_agent="bmkg-app")
-        loc = geolocator.geocode(lokasi)
-        if loc:
-            lat, lon = loc.latitude, loc.longitude
-            st.write(f"📍 Koordinat: {lat:.5f}, {lon:.5f}")
-            st.write(f"🗺️ Alamat: {loc.address}")
+st.info(f"Kode BMKG: **{kode}**")
 
-            # --- 4. Cari kode wilayah terdekat berdasarkan nama ---
-            # Ambil nama terakhir (misal desa/kota)
-            nama_search = lokasi.split(",")[0].strip().lower()
-            match = kode_df[kode_df['nama'].str.lower().str.contains(nama_search)]
-            if not match.empty:
-                kode = match.iloc[0]['kode']
-                st.success(f"Kode Wilayah Ditemukan: {kode}")
-            else:
-                kode = None
-                st.warning("⚠️ Kode wilayah tidak ditemukan di CSV")
+# -----------------------------
+# 2️⃣  Ambil Data BMKG
+# -----------------------------
+url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={kode}"
+@st.cache_data(ttl=3600)
+def get_bmkg(url):
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    return r.json()
+try:
+    data = get_bmkg(url)
+except Exception as e:
+    st.error(f"Gagal mengambil data BMKG: {e}")
+    st.stop()
 
-            # --- 5. Peta dengan Marker ---
-            m = folium.Map(location=[lat, lon], zoom_start=12)
-            folium.Marker([lat, lon], popup=lokasi).add_to(m)
-            st_folium(m, width=700, height=500)
+# -----------------------------
+# 3️⃣  Ekstrak Data Jam-per-Jam
+# -----------------------------
+def parse_bmkg(jsondata):
+    rows = []
+    cuaca = jsondata['data'][0]['cuaca']
+    for c in cuaca:
+        waktu = datetime.fromisoformat(c['local_datetime']).strftime('%Y-%m-%d %H:%M')
+        rows.append({
+            "Waktu": waktu,
+            "Suhu (°C)": c['t'],
+            "Kelembapan (%)": c['hu'],
+            "Hujan (mm)": c['rr'],
+            "Cuaca": c['weather'],
+            "Ikon": c['icon']
+        })
+    return pd.DataFrame(rows)
 
-            # --- 6. Ambil prakiraan BMKG (jika sudah punya endpoint) ---
-            if kode:
-                try:
-                    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={kode}"
-                    r = requests.get(url, timeout=10)
-                    if r.ok:
-                        data = r.json()
-                        st.write("✅ Data BMKG diterima")
-                        st.json(data)
-                    else:
-                        st.error("❌ Gagal mengambil data BMKG.")
-                except Exception as e:
-                    st.error(f"❌ Error ambil BMKG: {e}")
-        else:
-            st.error("Lokasi tidak ditemukan.")
-    except Exception as e:
-        st.error(f"Geocoding error: {e}")
+df_cuaca = parse_bmkg(data)
+
+# -----------------------------
+# 4️⃣  Pilih Tanggal
+# -----------------------------
+tanggal_unik = sorted(df_cuaca['Waktu'].str[:10].unique())
+tgl_pilih = st.selectbox("Pilih Tanggal", tanggal_unik)
+df_hari = df_cuaca[df_cuaca['Waktu'].str.startswith(tgl_pilih)]
+
+# -----------------------------
+# 5️⃣  Tabel Prakiraan
+# -----------------------------
+st.subheader("📋 Tabel Prakiraan Per Jam")
+st.dataframe(df_hari, hide_index=True)
+
+# -----------------------------
+# 6️⃣  Grafik Suhu
+# -----------------------------
+st.subheader("📈 Grafik Suhu (°C)")
+fig_t = px.line(df_hari, x="Waktu", y="Suhu (°C)", markers=True)
+st.plotly_chart(fig_t, use_container_width=True)
+
+# -----------------------------
+# 7️⃣  Grafik Curah Hujan
+# -----------------------------
+st.subheader("💧 Grafik Curah Hujan (mm)")
+fig_r = px.bar(df_hari, x="Waktu", y="Hujan (mm)")
+st.plotly_chart(fig_r, use_container_width=True)
