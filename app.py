@@ -1,137 +1,140 @@
 import streamlit as st
 import requests
-import folium
-from streamlit_folium import st_folium
-from math import radians, cos, sin, sqrt, atan2
+import pandas as pd
+import pydeck as pdk
 
-st.set_page_config(page_title="Prakiraan Cuaca BMKG", page_icon="🌦️", layout="wide")
-st.title("🌦️ Prakiraan Cuaca BMKG – Peta & Pencarian Nama")
+st.set_page_config(page_title="🌦️ Prakiraan Cuaca BMKG", layout="wide")
 
-# ================================
-# Fungsi untuk ambil data lokasi
-# ================================
-@st.cache_data(show_spinner=True)
-def get_all_locations(adm1_code="35"):  # 35 = Jawa Timur
+# =======================
+# 1. Fungsi Ambil Data
+# =======================
+@st.cache_data(show_spinner=False)
+def get_all_locations():
     """
-    Ambil daftar desa (adm4) lengkap dengan lat/lon di provinsi tertentu.
-    adm1_code -> kode provinsi sesuai BMKG (contoh: 35 = Jawa Timur)
+    Mengambil seluruh daftar wilayah hingga level desa dari API BMKG
+    untuk ditampilkan di peta.
     """
-    url = f"https://cuaca.bmkg.go.id/api/df/v1/adm/list?adm1={adm1_code}"
+    url = "https://cuaca.bmkg.go.id/api/df/v1/adm/all"  # ✅ Endpoint publik BMKG
     r = requests.get(url, timeout=30)
     r.raise_for_status()
-    data = r.json()["data"]
-    points = []
-    for kab in data:
-        for kec in kab.get("children", []):
-            for desa in kec.get("children", []):
-                points.append({
-                    "prov": kab.get("parent_name", "Jawa Timur"),
-                    "kab": kab["name"],
-                    "kec": kec["name"],
-                    "desa": desa["name"],
-                    "kode": desa["code"],
-                    "lat": desa["lat"],
-                    "lon": desa["lon"]
-                })
-    return points
+    raw = r.json()
 
-# ================================
-# Fungsi ambil prakiraan
-# ================================
-def get_forecast(kode_adm4):
-    url = f"https://cuaca.bmkg.go.id/api/df/v1/forecast/adm?adm4={kode_adm4}"
+    # Gabungkan semua level menjadi dataframe dengan koordinat
+    records = []
+    for p in raw["data"]:
+        # Pastikan setiap record punya lat/lon
+        if p.get("lat") and p.get("lon"):
+            records.append({
+                "Provinsi": p.get("adm1_name"),
+                "Kab/Kota": p.get("adm2_name"),
+                "Kecamatan": p.get("adm3_name"),
+                "Desa": p.get("adm4_name"),
+                "adm1": p.get("adm1"),
+                "adm2": p.get("adm2"),
+                "adm3": p.get("adm3"),
+                "adm4": p.get("adm4"),
+                "lat": float(p["lat"]),
+                "lon": float(p["lon"])
+            })
+    return pd.DataFrame(records)
+
+@st.cache_data(show_spinner=False)
+def get_forecast(adm1, adm2, adm3, adm4):
+    """Ambil prakiraan cuaca dari BMKG berdasarkan kode wilayah."""
+    url = (
+        f"https://cuaca.bmkg.go.id/api/df/v1/forecast/adm?"
+        f"adm1={adm1}&adm2={adm2}&adm3={adm3}&adm4={adm4}"
+    )
     r = requests.get(url, timeout=30)
     r.raise_for_status()
     return r.json()
 
-# ================================
-# Fungsi cari titik terdekat
-# ================================
-def nearest_point(points, lat, lon):
-    def haversine(p):
-        R = 6371  # km
-        dlat = radians(p["lat"] - lat)
-        dlon = radians(p["lon"] - lon)
-        a = sin(dlat/2)**2 + cos(radians(lat))*cos(radians(p["lat"]))*sin(dlon/2)**2
-        return 2 * R * atan2(sqrt(a), sqrt(1-a))
-    return min(points, key=haversine)
+# =======================
+# 2. Ambil Data Wilayah
+# =======================
+st.title("🌦️ Prakiraan Cuaca BMKG – Peta & Pencarian Nama")
 
-# ================================
-# Ambil data lokasi
-# ================================
-with st.spinner("🔍 Mengambil daftar wilayah BMKG..."):
-    points = get_all_locations()
-
-# ================================
-# Sidebar input pencarian
-# ================================
-st.sidebar.header("🔎 Cari Lokasi")
-search_name = st.sidebar.text_input("Nama Desa/Kecamatan/Kota", "")
-
-selected_point = None
-if search_name:
-    # cari yang mengandung kata kunci (case-insensitive)
-    matches = [p for p in points if search_name.lower() in p["desa"].lower()
-                                      or search_name.lower() in p["kec"].lower()
-                                      or search_name.lower() in p["kab"].lower()]
-    if matches:
-        selected_point = matches[0]   # ambil yang pertama saja
-        st.sidebar.success(
-            f"Ditemukan: {selected_point['desa']} - {selected_point['kec']} ({selected_point['kab']})"
-        )
-    else:
-        st.sidebar.warning("Wilayah tidak ditemukan.")
-
-# ================================
-# Tampilkan peta
-# ================================
-if selected_point:
-    center = [selected_point["lat"], selected_point["lon"]]
-    zoom = 12
-else:
-    center = [-7.4, 112.7]  # default tengah Jawa Timur
-    zoom = 8
-
-m = folium.Map(location=center, zoom_start=zoom)
-
-for p in points:
-    # beri warna merah jika hasil pencarian
-    color = "red" if selected_point and p["kode"] == selected_point["kode"] else "blue"
-    popup_text = (f"<b>{p['desa']}</b><br>{p['kec']} - {p['kab']}<br>Kode: {p['kode']}")
-    folium.Marker(
-        location=[p["lat"], p["lon"]],
-        popup=popup_text,
-        tooltip="Klik untuk prakiraan",
-        icon=folium.Icon(color=color, icon="cloud")
-    ).add_to(m)
-
-map_data = st_folium(m, width=900, height=600)
-
-# ================================
-# Jika user klik peta
-# ================================
-clicked = map_data.get("last_object_clicked")
-if clicked:
-    lat, lon = clicked["lat"], clicked["lng"]
-    sel = nearest_point(points, lat, lon)
-    selected_point = sel  # override hasil pencarian jika user klik
-
-# ================================
-# Tampilkan prakiraan cuaca
-# ================================
-if selected_point:
-    st.subheader(f"📍 {selected_point['desa']}, {selected_point['kec']} – {selected_point['kab']}")
-    st.write(f"Kode wilayah: `{selected_point['kode']}`")
+with st.spinner("🔍 Mengambil daftar lokasi dari BMKG..."):
     try:
-        with st.spinner("☁️ Mengambil prakiraan cuaca..."):
-            forecast = get_forecast(selected_point["kode"])
-            if "data" in forecast and forecast["data"]:
-                timeseries = forecast["data"][0]["cuaca"]
-                st.success("Prakiraan Cuaca:")
-                st.table(timeseries)
-            else:
-                st.warning("Data prakiraan tidak ditemukan.")
+        df = get_all_locations()
     except Exception as e:
-        st.error(f"Gagal mengambil prakiraan: {e}")
-else:
-    st.info("💡 Ketik nama desa/kecamatan/kota di sidebar atau klik marker di peta untuk melihat prakiraan.")
+        st.error(f"Gagal memuat daftar lokasi BMKG: {e}")
+        st.stop()
+
+# =======================
+# 3. Input Nama Daerah
+# =======================
+col1, col2 = st.columns([1,2])
+with col1:
+    query = st.text_input(
+        "🔎 Masukkan nama daerah (Desa/Kecamatan/Kota/Provinsi)",
+        placeholder="Contoh: Simogirang"
+    )
+
+# Filter berdasarkan input user
+filtered = df
+if query:
+    filtered = df[df.apply(lambda x: query.lower() in " ".join(x.astype(str)).lower(), axis=1)]
+
+with col1:
+    st.write(f"🔹 Ditemukan **{len(filtered)}** lokasi")
+
+# =======================
+# 4. Tampilkan Peta
+# =======================
+layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=filtered,
+    get_position=["lon", "lat"],
+    get_radius=400,
+    get_fill_color=[0, 128, 255],
+    pickable=True
+)
+
+view_state = pdk.ViewState(
+    latitude=filtered["lat"].mean() if len(filtered) else -2,
+    longitude=filtered["lon"].mean() if len(filtered) else 118,
+    zoom=6 if len(filtered) else 4
+)
+
+st.pydeck_chart(
+    pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        tooltip={"text": "{Desa}, {Kecamatan}, {Kab/Kota}, {Provinsi}"}
+    )
+)
+
+# =======================
+# 5. Pilih Lokasi & Ambil Prakiraan
+# =======================
+with col2:
+    if len(filtered) > 0:
+        selected = st.selectbox(
+            "📍 Pilih lokasi untuk ambil prakiraan:",
+            options=filtered.index,
+            format_func=lambda i: (
+                f"{filtered.loc[i, 'Desa']} - {filtered.loc[i, 'Kecamatan']} "
+                f"({filtered.loc[i, 'Kab/Kota']})"
+            )
+        )
+
+        if st.button("🌤️ Ambil Prakiraan Cuaca"):
+            row = filtered.loc[selected]
+            try:
+                data = get_forecast(row.adm1, row.adm2, row.adm3, row.adm4)
+                st.success(f"✅ Data cuaca untuk {row.Desa}, {row.Kecamatan}")
+                # tampilkan ringkasan prakiraan
+                if "data" in data:
+                    for item in data["data"]:
+                        nama = item.get("name")
+                        tgl = item.get("tanggal")
+                        cuaca = item.get("cuaca")
+                        suhu = item.get("t")
+                        st.write(f"📅 {tgl} | {nama} → {cuaca} ({suhu}°C)")
+                else:
+                    st.warning("Data prakiraan tidak tersedia.")
+            except Exception as e:
+                st.error(f"Gagal mengambil prakiraan cuaca: {e}")
+    else:
+        st.info("🔹 Masukkan nama daerah di kiri untuk memulai.")
