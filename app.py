@@ -9,7 +9,6 @@ st.title("🌦️ Prakiraan Cuaca BMKG by Nama Daerah")
 # Fungsi utilitas
 # ---------------------------
 def get_json(url):
-    """Ambil JSON dari API dan kembalikan list data aman."""
     try:
         r = requests.get(url, timeout=20)
         r.raise_for_status()
@@ -24,33 +23,41 @@ def get_json(url):
         st.error(f"⚠️ Kesalahan koneksi: {e}")
         return []
 
-@st.cache_data(ttl=86400)  # cache 1 hari
+def safe_name(obj):
+    """Ambil nama wilayah dari key yang ada."""
+    for k in ["name","provinsi","kotkab","kecamatan","desa"]:
+        if k in obj and obj[k]:
+            return obj[k]
+    return "-"
+
+@st.cache_data(ttl=86400)
 def get_all_locations():
-    """
-    Ambil daftar seluruh provinsi → kab/kota → kecamatan → desa.
-    Hasil berupa DataFrame dengan kode adm1-4.
-    """
     base = "https://cuaca.bmkg.go.id/api/df/v1/adm/list"
     provs = get_json(base)
     rows = []
     for p in provs:
-        kab_list = get_json(f"{base}?adm1={p['adm1']}")
+        prov_name = safe_name(p)
+        adm1 = p.get("adm1","")
+        kab_list = get_json(f"{base}?adm1={adm1}")
         for k in kab_list:
-            kec_list = get_json(f"{base}?adm1={p['adm1']}&adm2={k['adm2']}")
+            kab_name = safe_name(k)
+            adm2 = k.get("adm2","")
+            kec_list = get_json(f"{base}?adm1={adm1}&adm2={adm2}")
             for c in kec_list:
-                desa_list = get_json(
-                    f"{base}?adm1={p['adm1']}&adm2={k['adm2']}&adm3={c['adm3']}"
-                )
+                kec_name = safe_name(c)
+                adm3 = c.get("adm3","")
+                desa_list = get_json(f"{base}?adm1={adm1}&adm2={adm2}&adm3={adm3}")
                 for d in desa_list:
+                    desa_name = safe_name(d)
                     rows.append({
-                        "Provinsi": p["name"],
-                        "Kab/Kota": k["name"],
-                        "Kecamatan": c["name"],
-                        "Desa": d["name"],
-                        "adm1": p["adm1"],
-                        "adm2": k["adm2"],
-                        "adm3": c["adm3"],
-                        "adm4": d["adm4"],
+                        "Provinsi": prov_name,
+                        "Kab/Kota": kab_name,
+                        "Kecamatan": kec_name,
+                        "Desa": desa_name,
+                        "adm1": adm1,
+                        "adm2": adm2,
+                        "adm3": adm3,
+                        "adm4": d.get("adm4",""),
                     })
     return pd.DataFrame(rows)
 
@@ -62,29 +69,26 @@ def get_forecast(adm1, adm2, adm3, adm4):
     data = get_json(url)
     if not data:
         return pd.DataFrame()
-    # Data biasanya berada di data[0]["data"]
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "data" in data[0]:
+    if isinstance(data, list) and len(data)>0 and isinstance(data[0], dict) and "data" in data[0]:
         cuaca = data[0]["data"]
     else:
         cuaca = data
     if not cuaca:
         return pd.DataFrame()
     df = pd.DataFrame(cuaca)
-    # Penyesuaian kolom
     rename_map = {
-        "jamCuaca": "Jam",
-        "cuaca": "Kondisi",
-        "kodeCuaca": "Kode",
-        "tempC": "Suhu (°C)",
-        "rh": "Kelembapan (%)"
+        "jamCuaca":"Jam",
+        "cuaca":"Kondisi",
+        "kodeCuaca":"Kode",
+        "tempC":"Suhu (°C)",
+        "rh":"Kelembapan (%)"
     }
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-    return df
+    return df.rename(columns={k:v for k,v in rename_map.items() if k in df.columns})
 
 # ---------------------------
 # UI
 # ---------------------------
-nama = st.text_input("Masukkan nama daerah (Provinsi/Kabupaten/Kecamatan/Desa):", "Simogirang")
+nama = st.text_input("Masukkan nama daerah (Provinsi/Kabupaten/Kecamatan/Desa):","Simogirang")
 
 if st.button("Cari"):
     if not nama.strip():
@@ -120,7 +124,7 @@ if st.button("Cari"):
                 row = hasil.loc[idx]
                 st.info(f"🌐 Mengambil prakiraan cuaca untuk: {row['Desa']}, {row['Kecamatan']}")
 
-                cuaca_df = get_forecast(row.adm1, row.adm2, row.adm3, row.adm4)
+                cuaca_df = get_forecast(row.adm1,row.adm2,row.adm3,row.adm4)
                 if cuaca_df.empty:
                     st.error("❌ Data prakiraan cuaca tidak tersedia.")
                 else:
