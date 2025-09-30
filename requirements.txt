@@ -3,3 +3,6 @@ pandas
 openpyxl
 reportlab
 python-docx
+requests
+folium
+streamlit-folium
