@@ -1,111 +1,132 @@
 import streamlit as st
 import requests
+import pandas as pd
+from datetime import datetime
 
-st.set_page_config(page_title="Prakiraan Cuaca BMKG by Nama", page_icon="⛅")
+st.set_page_config(page_title="🌦️ Prakiraan Cuaca BMKG", page_icon="⛅", layout="wide")
 
-BASE = "https://cuaca.bmkg.go.id/api/df/v1"
+# -----------------------------------------
+# Fungsi API BMKG
+# -----------------------------------------
+BASE_URL = "https://api-apps.bmkg.go.id/publik/prakiraan-cuaca"
 
-
-# =========================
-# Fungsi Helper
-# =========================
-@st.cache_data(show_spinner=False)
-def get_list(adm1=None, adm2=None, adm3=None):
-    """Ambil daftar wilayah sesuai level (prov, kab, kec, desa)."""
-    params = {}
-    if adm1: params["adm1"] = adm1
-    if adm2: params["adm2"] = adm2
-    if adm3: params["adm3"] = adm3
+def get_wilayah(adm_name, level, parent_code=""):
+    """
+    Pencarian kode wilayah BMKG berdasarkan nama dan level.
+    level: adm1, adm2, adm3, adm4
+    """
     try:
-        r = requests.get(f"{BASE}/adm/list", params=params, timeout=10)
+        url = f"{BASE_URL}/wilayah"
+        params = {"nama": adm_name, "level": level}
+        if parent_code:
+            params["parent"] = parent_code
+        r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
-        j = r.json()
-        # API baru: langsung list
-        if isinstance(j, list):
-            return j
-        # fallback API lama
-        if isinstance(j, dict) and "data" in j:
-            return j["data"]
-        return []
+        data = r.json()
+        if data and "data" in data and len(data["data"]) > 0:
+            return data["data"][0]  # ambil hasil pertama
     except Exception as e:
-        st.error(f"Gagal mengambil daftar wilayah: {e}")
-        return []
+        st.warning(f"Gagal mencari {level}: {e}")
+    return None
 
 
-@st.cache_data(show_spinner=False)
-def get_forecast(adm1, adm2, adm3, adm4):
-    """Ambil prakiraan cuaca desa/kelurahan."""
+def get_cuaca(adm4):
+    """Ambil data prakiraan cuaca berdasarkan kode desa (adm4)."""
     try:
-        params = dict(adm1=adm1, adm2=adm2, adm3=adm3, adm4=adm4)
-        r = requests.get(f"{BASE}/forecast/adm", params=params, timeout=10)
+        url = f"{BASE_URL}"
+        params = {"adm4": adm4}
+        r = requests.get(url, params=params, timeout=20)
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        st.error(f"Gagal mengambil data prakiraan: {e}")
-        return {}
-
-
-def find_by_name(data, name_key, keyword):
-    """Cari dict pada list berdasarkan nama (case-insensitive)."""
-    keyword = (keyword or "").strip().lower()
-    if not keyword:
+        st.error(f"⚠️ Gagal mengambil data cuaca: {e}")
         return None
-    return next(
-        (item for item in data if keyword in (item.get(name_key) or "").lower()),
-        None
-    )
 
 
-# =========================
-# UI Streamlit
-# =========================
+# -----------------------------------------
+# Input Pengguna
+# -----------------------------------------
 st.title("🌦️ Prakiraan Cuaca BMKG by Nama Wilayah")
 
-# --- Provinsi
-prov_input = st.text_input("Provinsi", placeholder="Contoh: Jawa Timur")
-prov_data = get_list()
-prov = find_by_name(prov_data, "provinsi", prov_input)
+prov = st.text_input("Provinsi", "Jawa Timur")
+kab = st.text_input("Kabupaten/Kota", "Sidoarjo")
+kec = st.text_input("Kecamatan", "Prambon")
+desa = st.text_input("Kelurahan/Desa", "Simogirang")
 
-if prov:
-    st.success(f"Provinsi ditemukan: {prov['provinsi']} (adm1={prov['adm1']})")
+if st.button("🔍 Cari Prakiraan Cuaca"):
+    with st.spinner("Mencari data wilayah..."):
+        # Cari Provinsi
+        w_prov = get_wilayah(prov, "adm1")
+        if not w_prov:
+            st.error("Provinsi tidak ditemukan.")
+            st.stop()
 
-    # --- Kab/Kota
-    kab_input = st.text_input("Kab/Kota", placeholder="Contoh: Sidoarjo")
-    kab_data = get_list(adm1=prov["adm1"])
-    kab = find_by_name(kab_data, "kotkab", kab_input)
+        w_kab = get_wilayah(kab, "adm2", w_prov["adm1"])
+        if not w_kab:
+            st.error("Kab/Kota tidak ditemukan.")
+            st.stop()
 
-    if kab:
-        st.success(f"Kab/Kota ditemukan: {kab['kotkab']} (adm2={kab['adm2']})")
+        w_kec = get_wilayah(kec, "adm3", w_kab["adm2"])
+        if not w_kec:
+            st.error("Kecamatan tidak ditemukan.")
+            st.stop()
 
-        # --- Kecamatan
-        kec_input = st.text_input("Kecamatan", placeholder="Contoh: Buduran")
-        kec_data = get_list(adm1=prov["adm1"], adm2=kab["adm2"])
-        kec = find_by_name(kec_data, "kecamatan", kec_input)
+        w_desa = get_wilayah(desa, "adm4", w_kec["adm3"])
+        if not w_desa:
+            st.error("Desa tidak ditemukan.")
+            st.stop()
 
-        if kec:
-            st.success(f"Kecamatan ditemukan: {kec['kecamatan']} (adm3={kec['adm3']})")
+        st.success(
+            f"✅ Wilayah ditemukan: {w_prov['nama']} > {w_kab['nama']} > "
+            f"{w_kec['nama']} > {w_desa['nama']}"
+        )
 
-            # --- Desa
-            desa_input = st.text_input("Kelurahan/Desa", placeholder="Contoh: Sidokerto")
-            desa_data = get_list(adm1=prov["adm1"], adm2=kab["adm2"], adm3=kec["adm3"])
-            desa = find_by_name(desa_data, "desa", desa_input)
+    # -----------------------------------------
+    # Ambil data cuaca
+    # -----------------------------------------
+    with st.spinner("Mengambil data prakiraan cuaca..."):
+        cuaca = get_cuaca(w_desa["adm4"])
 
-            if desa:
-                st.success(f"Desa ditemukan: {desa['desa']} (adm4={desa['adm4']})")
+    if cuaca and "data" in cuaca:
+        lokasi = cuaca["lokasi"]
+        st.subheader("📍 Lokasi")
+        st.write(
+            f"Provinsi: **{lokasi['provinsi']}**, "
+            f"Kab/Kota: **{lokasi['kotkab']}**, "
+            f"Kecamatan: **{lokasi['kecamatan']}**, "
+            f"Desa: **{lokasi['desa']}**"
+        )
+        st.write(f"Koordinat: {lokasi['lat']}, {lokasi['lon']}")
 
-                if st.button("Ambil Prakiraan Cuaca"):
-                    data = get_forecast(
-                        prov["adm1"], kab["adm2"], kec["adm3"], desa["adm4"]
-                    )
-                    if data:
-                        st.subheader("📊 Prakiraan Cuaca")
-                        st.json(data)
-            else:
-                st.info("Masukkan nama desa/kelurahan yang sesuai.")
-        else:
-            st.info("Masukkan nama kecamatan yang sesuai.")
-    else:
-        st.info("Masukkan nama kab/kota yang sesuai.")
-else:
-    if prov_input:
-        st.error("Provinsi tidak ditemukan.")
+        # Ambil data cuaca jam-jaman (hari pertama)
+        jam_jaman = []
+        for group in cuaca["data"]:
+            for item in group["cuaca"][0]:  # ambil blok pertama (hari ini)
+                jam_jaman.append({
+                    "Waktu": item["local_datetime"],
+                    "Suhu (°C)": item["t"],
+                    "Kelembapan (%)": item["hu"],
+                    "Arah Angin": item["wd"],
+                    "Kecepatan (m/s)": item["ws"],
+                    "Cuaca": item["weather_desc"],
+                    "Icon": item["image"]
+                })
+
+        df = pd.DataFrame(jam_jaman)
+
+        st.subheader("📊 Prakiraan Cuaca (Hari Ini)")
+        st.dataframe(df.drop(columns=["Icon"]), use_container_width=True)
+
+        # Tampilkan kartu cuaca
+        st.subheader("🖼️ Kartu Cuaca")
+        cols = st.columns(4)
+        for i, row in df.iterrows():
+            with cols[i % 4]:
+                st.markdown(
+                    f"**{row['Waktu']}**  \n"
+                    f"🌡️ {row['Suhu (°C)']} °C  \n"
+                    f"💧 {row['Kelembapan (%)']}%  \n"
+                    f"💨 {row['Kecepatan (m/s)']} m/s  \n"
+                    f"☁️ {row['Cuaca']}"
+                )
+                st.image(row["Icon"], width=60)
