@@ -1,93 +1,65 @@
 import streamlit as st
+import pandas as pd
 import requests
 from geopy.geocoders import Nominatim
 from streamlit_folium import st_folium
 import folium
-from datetime import datetime
 
-st.set_page_config(page_title="🌦️ Prakiraan Cuaca BMKG", layout="wide")
-st.title("🌦️ Prakiraan Cuaca BMKG – Pulau Jawa (Demo)")
+st.set_page_config(page_title="Prakiraan Cuaca BMKG", layout="wide")
 
-# --- Fungsi Geocoding
-@st.cache_data(show_spinner=False)
-def geocode_location(place):
-    geolocator = Nominatim(user_agent="bmkg_app")
-    location = geolocator.geocode(place, timeout=10)
-    if location:
-        return location.latitude, location.longitude, location.address
-    return None, None, None
+# --- 1. Load CSV kode wilayah ---
+@st.cache_data
+def load_kode_wilayah():
+    # Pastikan kolom bernama 'kode' dan 'nama'
+    df = pd.read_csv("data/kode_wilayah.csv", dtype=str)
+    df.columns = [c.lower() for c in df.columns]
+    return df
 
-# --- Fungsi Ambil Data BMKG
-@st.cache_data(show_spinner=False)
-def get_forecast(code):
-    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={code}"
-    r = requests.get(url, timeout=10)
-    if r.status_code == 200:
-        return r.json()
-    return None
+kode_df = load_kode_wilayah()
 
-# --- Dummy Kode BMKG (contoh Surabaya)
-def get_bmkg_code(lat, lon):
-    # TODO: ganti dengan pencarian ADM4 sebenarnya
-    return "351517"   # kode ADM4 Surabaya pusat
+# --- 2. Input lokasi ---
+lokasi = st.text_input("Masukkan Nama Desa/Kota", "Simogirang, Sidoarjo")
 
-# --- Session State untuk menyimpan lokasi terakhir
-if "lat" not in st.session_state:
-    st.session_state.lat = None
-    st.session_state.lon = None
-    st.session_state.address = None
-
-# --- Sidebar Input
-st.sidebar.header("🔍 Pencarian Lokasi")
-place = st.sidebar.text_input("Masukkan Nama Desa/Kota di Pulau Jawa", "Prambon, Sidoarjo")
-if st.sidebar.button("Cari Lokasi"):
-    lat, lon, address = geocode_location(place)
-    if lat and lon:
-        st.session_state.lat = lat
-        st.session_state.lon = lon
-        st.session_state.address = address
-    else:
-        st.warning("Lokasi tidak ditemukan. Coba kata kunci lain.")
-
-# --- Gunakan lokasi yang tersimpan
-lat = st.session_state.lat
-lon = st.session_state.lon
-address = st.session_state.address
-
-# --- Peta
-m = folium.Map(location=[-7.25, 112.75], zoom_start=7, tiles="OpenStreetMap")
-if lat and lon:
-    folium.Marker([lat, lon], popup=address,
-                  icon=folium.Icon(color="blue", icon="cloud")).add_to(m)
-
-st_map = st_folium(m, width=700, height=500)
-
-# --- Tampilkan Data Cuaca Jika Ada Lokasi
-if lat and lon:
-    st.markdown(f"📍 **Koordinat:** {lat:.5f}, {lon:.5f}")
-    st.markdown(f"🗺️ **Alamat:** {address}")
-
+# --- 3. Geocoding ---
+if lokasi:
     try:
-        code = get_bmkg_code(lat, lon)
-        if not code:
-            raise ValueError("Kode wilayah tidak ditemukan.")
+        geolocator = Nominatim(user_agent="bmkg-app")
+        loc = geolocator.geocode(lokasi)
+        if loc:
+            lat, lon = loc.latitude, loc.longitude
+            st.write(f"📍 Koordinat: {lat:.5f}, {lon:.5f}")
+            st.write(f"🗺️ Alamat: {loc.address}")
 
-        forecast = get_forecast(code)
-        if forecast and isinstance(forecast, dict):
-            st.success(f"✅ Data BMKG ditemukan untuk kode: {code}")
-
-            if "data" in forecast:
-                st.write("### 🌤️ Prakiraan Cuaca (Ringkasan)")
-                for item in forecast["data"]:
-                    tgl = item.get("tanggal", "-")
-                    cuaca = item.get("cuaca", "-")
-                    suhu = item.get("t", "-")
-                    st.write(f"- **{tgl}** : {cuaca} | 🌡️ {suhu}°C")
+            # --- 4. Cari kode wilayah terdekat berdasarkan nama ---
+            # Ambil nama terakhir (misal desa/kota)
+            nama_search = lokasi.split(",")[0].strip().lower()
+            match = kode_df[kode_df['nama'].str.lower().str.contains(nama_search)]
+            if not match.empty:
+                kode = match.iloc[0]['kode']
+                st.success(f"Kode Wilayah Ditemukan: {kode}")
             else:
-                st.warning("⚠️ Struktur data BMKG berbeda, tidak bisa ditampilkan langsung.")
+                kode = None
+                st.warning("⚠️ Kode wilayah tidak ditemukan di CSV")
+
+            # --- 5. Peta dengan Marker ---
+            m = folium.Map(location=[lat, lon], zoom_start=12)
+            folium.Marker([lat, lon], popup=lokasi).add_to(m)
+            st_folium(m, width=700, height=500)
+
+            # --- 6. Ambil prakiraan BMKG (jika sudah punya endpoint) ---
+            if kode:
+                try:
+                    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={kode}"
+                    r = requests.get(url, timeout=10)
+                    if r.ok:
+                        data = r.json()
+                        st.write("✅ Data BMKG diterima")
+                        st.json(data)
+                    else:
+                        st.error("❌ Gagal mengambil data BMKG.")
+                except Exception as e:
+                    st.error(f"❌ Error ambil BMKG: {e}")
         else:
-            st.error("❌ Tidak bisa mengambil data prakiraan dari BMKG.")
+            st.error("Lokasi tidak ditemukan.")
     except Exception as e:
-        st.error(f"❌ Gagal ambil kode BMKG: {e}")
-else:
-    st.info("Masukkan nama desa/kota dan klik **Cari Lokasi** untuk mulai.")
+        st.error(f"Geocoding error: {e}")
