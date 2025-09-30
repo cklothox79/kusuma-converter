@@ -5,7 +5,7 @@ from streamlit_folium import st_folium
 from math import radians, cos, sin, sqrt, atan2
 
 st.set_page_config(page_title="Prakiraan Cuaca BMKG", page_icon="🌦️", layout="wide")
-st.title("🌦️ Prakiraan Cuaca BMKG – Klik Peta")
+st.title("🌦️ Prakiraan Cuaca BMKG – Peta & Pencarian Nama")
 
 # ================================
 # Fungsi untuk ambil data lokasi
@@ -63,43 +63,75 @@ with st.spinner("🔍 Mengambil daftar wilayah BMKG..."):
     points = get_all_locations()
 
 # ================================
+# Sidebar input pencarian
+# ================================
+st.sidebar.header("🔎 Cari Lokasi")
+search_name = st.sidebar.text_input("Nama Desa/Kecamatan/Kota", "")
+
+selected_point = None
+if search_name:
+    # cari yang mengandung kata kunci (case-insensitive)
+    matches = [p for p in points if search_name.lower() in p["desa"].lower()
+                                      or search_name.lower() in p["kec"].lower()
+                                      or search_name.lower() in p["kab"].lower()]
+    if matches:
+        selected_point = matches[0]   # ambil yang pertama saja
+        st.sidebar.success(
+            f"Ditemukan: {selected_point['desa']} - {selected_point['kec']} ({selected_point['kab']})"
+        )
+    else:
+        st.sidebar.warning("Wilayah tidak ditemukan.")
+
+# ================================
 # Tampilkan peta
 # ================================
-center = [-7.4, 112.7]  # tengah Jawa Timur
-m = folium.Map(location=center, zoom_start=8)
+if selected_point:
+    center = [selected_point["lat"], selected_point["lon"]]
+    zoom = 12
+else:
+    center = [-7.4, 112.7]  # default tengah Jawa Timur
+    zoom = 8
+
+m = folium.Map(location=center, zoom_start=zoom)
 
 for p in points:
-    popup_text = (f"<b>{p['desa']}</b><br>"
-                  f"{p['kec']} - {p['kab']}<br>"
-                  f"Kode: {p['kode']}")
+    # beri warna merah jika hasil pencarian
+    color = "red" if selected_point and p["kode"] == selected_point["kode"] else "blue"
+    popup_text = (f"<b>{p['desa']}</b><br>{p['kec']} - {p['kab']}<br>Kode: {p['kode']}")
     folium.Marker(
         location=[p["lat"], p["lon"]],
         popup=popup_text,
         tooltip="Klik untuk prakiraan",
-        icon=folium.Icon(color="blue", icon="cloud")
+        icon=folium.Icon(color=color, icon="cloud")
     ).add_to(m)
 
 map_data = st_folium(m, width=900, height=600)
 
 # ================================
-# Jika marker di klik
+# Jika user klik peta
 # ================================
-if map_data and map_data.get("last_object_clicked"):
-    lat = map_data["last_object_clicked"]["lat"]
-    lon = map_data["last_object_clicked"]["lng"]
+clicked = map_data.get("last_object_clicked")
+if clicked:
+    lat, lon = clicked["lat"], clicked["lng"]
     sel = nearest_point(points, lat, lon)
+    selected_point = sel  # override hasil pencarian jika user klik
 
-    st.subheader(f"📍 {sel['desa']}, {sel['kec']} – {sel['kab']}")
-    st.write(f"Kode wilayah: `{sel['kode']}`")
+# ================================
+# Tampilkan prakiraan cuaca
+# ================================
+if selected_point:
+    st.subheader(f"📍 {selected_point['desa']}, {selected_point['kec']} – {selected_point['kab']}")
+    st.write(f"Kode wilayah: `{selected_point['kode']}`")
     try:
         with st.spinner("☁️ Mengambil prakiraan cuaca..."):
-            forecast = get_forecast(sel["kode"])
-            # Ambil data prakiraan
+            forecast = get_forecast(selected_point["kode"])
             if "data" in forecast and forecast["data"]:
                 timeseries = forecast["data"][0]["cuaca"]
                 st.success("Prakiraan Cuaca:")
-                st.table(timeseries)  # tampilkan tabel sederhana
+                st.table(timeseries)
             else:
                 st.warning("Data prakiraan tidak ditemukan.")
     except Exception as e:
         st.error(f"Gagal mengambil prakiraan: {e}")
+else:
+    st.info("💡 Ketik nama desa/kecamatan/kota di sidebar atau klik marker di peta untuk melihat prakiraan.")
