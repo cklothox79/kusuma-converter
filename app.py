@@ -1,71 +1,63 @@
 import streamlit as st
 import requests
-import json
-import folium
-from streamlit_folium import st_folium
+from geopy.geocoders import Nominatim
 
-st.set_page_config(page_title="🌦️ Prakiraan Cuaca BMKG – Pulau Jawa",
-                   page_icon="🌦️", layout="wide")
+st.set_page_config(page_title="Prakiraan Cuaca BMKG – Tahap 1", page_icon="🌦️")
+st.title("🌦️ Prakiraan Cuaca BMKG – Tahap 1 (Nama → Koordinat → Prakiraan)")
 
-st.title("🌦️ Prakiraan Cuaca BMKG – Pulau Jawa")
+# =========================
+# Fungsi bantu
+# =========================
+def geocode_place(place_name):
+    """Mengubah nama daerah menjadi koordinat lat, lon"""
+    geolocator = Nominatim(user_agent="bmkg_geocode")
+    location = geolocator.geocode(place_name + ", Indonesia")
+    if location:
+        return location.latitude, location.longitude, location.address
+    return None, None, None
 
-# ====== Data Wilayah Pulau Jawa (sementara lokal) ======
-# Format: {provinsi: {kabupaten: kode_adm4_BMKG}}
-# Kode di bawah hanya CONTOH (gunakan kode resmi BMKG jika sudah tersedia)
-wilayah_jawa = {
-    "Banten": {
-        "Kota Serang": "36.71.0000",
-        "Kota Tangerang": "36.72.0000"
-    },
-    "DKI Jakarta": {
-        "Jakarta Pusat": "31.71.0000",
-        "Jakarta Barat": "31.72.0000"
-    },
-    "Jawa Barat": {
-        "Bandung": "32.73.0000",
-        "Bogor": "32.71.0000"
-    },
-    "Jawa Tengah": {
-        "Semarang": "33.74.0000",
-        "Surakarta": "33.75.0000"
-    },
-    "DI Yogyakarta": {
-        "Yogyakarta": "34.71.0000"
-    },
-    "Jawa Timur": {
-        "Surabaya": "35.78.0000",
-        "Malang": "35.73.0000"
-    }
-}
-
-# ====== Sidebar Pilihan ======
-st.sidebar.header("🟢 Pilih Wilayah")
-prov = st.sidebar.selectbox("Provinsi", list(wilayah_jawa.keys()))
-kab = st.sidebar.selectbox("Kota/Kabupaten", list(wilayah_jawa[prov].keys()))
-
-kode_wilayah = wilayah_jawa[prov][kab]
-
-# ====== Fungsi Ambil Data Prakiraan BMKG ======
-@st.cache_data(ttl=600)
-def get_forecast(adm4):
+def get_forecast(lat, lon):
     """
-    Contoh endpoint BMKG publik (update sesuai dokumentasi BMKG terbaru)
+    Contoh panggilan prakiraan BMKG berbasis koordinat.
+    Catatan: BMKG resmi pakai kode adm.
+    Di sini kita coba endpoint 'forecast/point' bila tersedia.
     """
-    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={adm4}"
-    r = requests.get(url, timeout=15)
-    r.raise_for_status()
-    return r.json()
-
-# ====== Peta Folium ======
-# (Lokasi default Jawa Tengah, bisa diperluas dengan koordinat real)
-m = folium.Map(location=[-7.25, 112.75], zoom_start=6, tiles="OpenStreetMap")
-st_map = st_folium(m, height=400, width=800)
-
-# ====== Tampilkan Prakiraan Cuaca ======
-if st.sidebar.button("🔎 Tampilkan Prakiraan"):
+    # Jika endpoint point tidak ada, bisa diarahkan ke adm
+    # atau gunakan web scraping. Untuk contoh, kita gunakan endpoint adm terdekat.
+    # Di bawah adalah contoh *dummy fallback* agar tetap jalan.
     try:
-        data = get_forecast(kode_wilayah)
-        st.subheader(f"Prakiraan Cuaca – {kab}, {prov}")
-        st.json(data)
-    except requests.exceptions.RequestException as e:
-        st.error(f"Gagal mengambil data prakiraan BMKG: {e}")
+        # --- Ganti jika ada endpoint BMKG untuk lat/lon ---
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation"
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        st.error(f"Gagal mengambil prakiraan: {e}")
+        return None
+
+# =========================
+# Input user
+# =========================
+place = st.text_input("Masukkan nama desa/kota (contoh: Simogirang, Sidoarjo, Malang):")
+
+if place:
+    st.write(f"🔍 Mencari koordinat untuk **{place}** ...")
+    lat, lon, addr = geocode_place(place)
+
+    if lat and lon:
+        st.success(f"📍 Koordinat ditemukan: {addr}\nLat: {lat:.4f}, Lon: {lon:.4f}")
+
+        st.write("🔎 Mengambil prakiraan cuaca (contoh data Open-Meteo, sementara) ...")
+        forecast = get_forecast(lat, lon)
+
+        if forecast:
+            # tampilkan ringkasan
+            hourly = forecast.get("hourly", {})
+            if hourly:
+                import pandas as pd
+                df = pd.DataFrame(hourly)
+                st.dataframe(df.head(24))  # tampil 24 jam ke depan
+            else:
+                st.warning("Tidak ada data prakiraan pada respons.")
+    else:
+        st.error("Koordinat tidak ditemukan. Coba nama lain.")
