@@ -5,57 +5,123 @@ import pandas as pd
 st.set_page_config(page_title="🌦️ Prakiraan Cuaca BMKG", page_icon="🌦️")
 st.title("🌦️ Prakiraan Cuaca BMKG by Nama Daerah")
 
-@st.cache_data(ttl=86400)
+# ---------------------------
+# Fungsi utilitas
+# ---------------------------
+def get_json(url):
+    """Ambil JSON dari API dan kembalikan list data aman."""
+    try:
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        j = r.json()
+        if isinstance(j, dict) and "data" in j:
+            return j["data"]
+        elif isinstance(j, list):
+            return j
+        else:
+            return []
+    except Exception as e:
+        st.error(f"⚠️ Kesalahan koneksi: {e}")
+        return []
+
+@st.cache_data(ttl=86400)  # cache 1 hari
 def get_all_locations():
+    """
+    Ambil daftar seluruh provinsi → kab/kota → kecamatan → desa.
+    Hasil berupa DataFrame dengan kode adm1-4.
+    """
     base = "https://cuaca.bmkg.go.id/api/df/v1/adm/list"
-    provs = requests.get(base).json()["data"]
+    provs = get_json(base)
     rows = []
     for p in provs:
-        kab = requests.get(f"{base}?adm1={p['adm1']}").json()["data"]
-        for k in kab:
-            kec = requests.get(f"{base}?adm1={p['adm1']}&adm2={k['adm2']}").json()["data"]
-            for c in kec:
-                desa = requests.get(
+        kab_list = get_json(f"{base}?adm1={p['adm1']}")
+        for k in kab_list:
+            kec_list = get_json(f"{base}?adm1={p['adm1']}&adm2={k['adm2']}")
+            for c in kec_list:
+                desa_list = get_json(
                     f"{base}?adm1={p['adm1']}&adm2={k['adm2']}&adm3={c['adm3']}"
-                ).json()["data"]
-                for d in desa:
+                )
+                for d in desa_list:
                     rows.append({
-                        "prov": p["name"],
-                        "kab": k["name"],
-                        "kec": c["name"],
-                        "desa": d["name"],
+                        "Provinsi": p["name"],
+                        "Kab/Kota": k["name"],
+                        "Kecamatan": c["name"],
+                        "Desa": d["name"],
                         "adm1": p["adm1"],
                         "adm2": k["adm2"],
                         "adm3": c["adm3"],
-                        "adm4": d["adm4"]
+                        "adm4": d["adm4"],
                     })
     return pd.DataFrame(rows)
 
-nama = st.text_input("Masukkan nama daerah:", "Sidomulyo")
+def get_forecast(adm1, adm2, adm3, adm4):
+    url = (
+        f"https://cuaca.bmkg.go.id/api/df/v1/forecast/adm"
+        f"?adm1={adm1}&adm2={adm2}&adm3={adm3}&adm4={adm4}"
+    )
+    data = get_json(url)
+    if not data:
+        return pd.DataFrame()
+    # Data biasanya berada di data[0]["data"]
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "data" in data[0]:
+        cuaca = data[0]["data"]
+    else:
+        cuaca = data
+    if not cuaca:
+        return pd.DataFrame()
+    df = pd.DataFrame(cuaca)
+    # Penyesuaian kolom
+    rename_map = {
+        "jamCuaca": "Jam",
+        "cuaca": "Kondisi",
+        "kodeCuaca": "Kode",
+        "tempC": "Suhu (°C)",
+        "rh": "Kelembapan (%)"
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    return df
+
+# ---------------------------
+# UI
+# ---------------------------
+nama = st.text_input("Masukkan nama daerah (Provinsi/Kabupaten/Kecamatan/Desa):", "Simogirang")
 
 if st.button("Cari"):
-    st.write("🔍 Mengambil dan memfilter daftar wilayah...")
-    try:
+    if not nama.strip():
+        st.warning("Silakan masukkan nama daerah.")
+    else:
+        st.info("🔍 Mengambil dan memfilter daftar wilayah...")
         df = get_all_locations()
-        mask = (
-            df["prov"].str.contains(nama, case=False) |
-            df["kab"].str.contains(nama, case=False) |
-            df["kec"].str.contains(nama, case=False) |
-            df["desa"].str.contains(nama, case=False)
-        )
-        hasil = df[mask]
-        if hasil.empty:
-            st.error("Wilayah tidak ditemukan.")
+        if df.empty:
+            st.error("❌ Tidak bisa mengambil daftar wilayah.")
         else:
-            st.dataframe(hasil)
-            idx = st.selectbox("Pilih lokasi:", hasil.index,
-                               format_func=lambda i: f"{hasil.loc[i,'desa']} - {hasil.loc[i,'kec']} ({hasil.loc[i,'kab']})")
-            row = hasil.loc[idx]
-            url = (
-                f"https://cuaca.bmkg.go.id/api/df/v1/forecast/adm"
-                f"?adm1={row.adm1}&adm2={row.adm2}&adm3={row.adm3}&adm4={row.adm4}"
+            mask = (
+                df["Provinsi"].str.contains(nama, case=False, na=False) |
+                df["Kab/Kota"].str.contains(nama, case=False, na=False) |
+                df["Kecamatan"].str.contains(nama, case=False, na=False) |
+                df["Desa"].str.contains(nama, case=False, na=False)
             )
-            r = requests.get(url).json()
-            st.json(r)  # atau diolah jadi tabel
-    except Exception as e:
-        st.error(f"⚠️ Kesalahan koneksi: {e}")
+            hasil = df[mask]
+            if hasil.empty:
+                st.error("❌ Wilayah tidak ditemukan.")
+            else:
+                st.success(f"✅ Ditemukan {len(hasil)} lokasi:")
+                st.dataframe(hasil, use_container_width=True)
+
+                idx = st.selectbox(
+                    "Pilih lokasi:",
+                    hasil.index,
+                    format_func=lambda i: (
+                        f"{hasil.loc[i,'Desa']} - {hasil.loc[i,'Kecamatan']} - "
+                        f"{hasil.loc[i,'Kab/Kota']} - {hasil.loc[i,'Provinsi']}"
+                    )
+                )
+
+                row = hasil.loc[idx]
+                st.info(f"🌐 Mengambil prakiraan cuaca untuk: {row['Desa']}, {row['Kecamatan']}")
+
+                cuaca_df = get_forecast(row.adm1, row.adm2, row.adm3, row.adm4)
+                if cuaca_df.empty:
+                    st.error("❌ Data prakiraan cuaca tidak tersedia.")
+                else:
+                    st.dataframe(cuaca_df, use_container_width=True)
