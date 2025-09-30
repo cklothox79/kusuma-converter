@@ -1,65 +1,38 @@
+import streamlit as st
 import requests
 
 BASE = "https://cuaca.bmkg.go.id/api/df/v1"
 
+@st.cache_data
 def get_list(adm1=None, adm2=None, adm3=None):
-    """Ambil daftar wilayah sesuai level"""
     params = {}
     if adm1: params["adm1"] = adm1
     if adm2: params["adm2"] = adm2
     if adm3: params["adm3"] = adm3
     r = requests.get(f"{BASE}/adm/list", params=params)
-    r.raise_for_status()
     return r.json()["data"]
 
-def search_region(province_name, kabupaten_name, kecamatan_name, kelurahan_name):
-    # 1️⃣ Cari provinsi
-    prov_list = get_list()
-    prov = next((p for p in prov_list if province_name.lower() in p["name"].lower()), None)
-    if not prov:
-        raise ValueError("Provinsi tidak ditemukan")
-    adm1 = prov["adm1"]
+st.title("Prakiraan Cuaca BMKG by Nama Wilayah")
 
-    # 2️⃣ Cari kab/kota
-    kab_list = get_list(adm1=adm1)
-    kab = next((k for k in kab_list if kabupaten_name.lower() in k["name"].lower()), None)
-    if not kab:
-        raise ValueError("Kab/Kota tidak ditemukan")
-    adm2 = kab["adm2"]
+provinsi = st.text_input("Provinsi", "Jawa Timur")
+kabupaten = st.text_input("Kab/Kota", "Sidoarjo")
+kecamatan = st.text_input("Kecamatan", "Buduran")
+kelurahan = st.text_input("Kelurahan/Desa", "Sidokerto")
 
-    # 3️⃣ Cari kecamatan
-    kec_list = get_list(adm1=adm1, adm2=adm2)
-    kec = next((k for k in kec_list if kecamatan_name.lower() in k["name"].lower()), None)
-    if not kec:
-        raise ValueError("Kecamatan tidak ditemukan")
-    adm3 = kec["adm3"]
+if st.button("Cari Data"):
+    try:
+        # --- pencarian kode ---
+        prov = next(p for p in get_list() if provinsi.lower() in p["name"].lower())
+        kab = next(k for k in get_list(prov["adm1"]) if kabupaten.lower() in k["name"].lower())
+        kec = next(k for k in get_list(prov["adm1"], kab["adm2"]) if kecamatan.lower() in k["name"].lower())
+        kel = next(k for k in get_list(prov["adm1"], kab["adm2"], kec["adm3"]) if kelurahan.lower() in k["name"].lower())
 
-    # 4️⃣ Cari kelurahan/desa
-    kel_list = get_list(adm1=adm1, adm2=adm2, adm3=adm3)
-    kel = next((k for k in kel_list if kelurahan_name.lower() in k["name"].lower()), None)
-    if not kel:
-        raise ValueError("Kelurahan tidak ditemukan")
-    adm4 = kel["adm4"]
+        # --- prakiraan ---
+        url = f"{BASE}/forecast/adm"
+        params = dict(adm1=prov["adm1"], adm2=kab["adm2"], adm3=kec["adm3"], adm4=kel["adm4"])
+        forecast = requests.get(url, params=params).json()
 
-    return adm1, adm2, adm3, adm4
-
-def get_forecast(adm1, adm2, adm3, adm4):
-    url = f"{BASE}/forecast/adm"
-    params = dict(adm1=adm1, adm2=adm2, adm3=adm3, adm4=adm4)
-    r = requests.get(url, params=params)
-    r.raise_for_status()
-    return r.json()
-
-# ⚡ Contoh pemakaian
-if __name__ == "__main__":
-    # Ganti sesuai kebutuhan
-    prov, kab, kec, kel = search_region(
-        province_name="Jawa Timur",
-        kabupaten_name="Sidoarjo",
-        kecamatan_name="Buduran",
-        kelurahan_name="Sidokerto"
-    )
-    data = get_forecast(prov, kab, kec, kel)
-    print(f"Kode wilayah: {prov}-{kab}-{kec}-{kel}")
-    # tampilkan prakiraan pertama saja
-    print(data["data"][0])
+        st.success(f"Kode Wilayah: {prov['adm1']}-{kab['adm2']}-{kec['adm3']}-{kel['adm4']}")
+        st.json(forecast["data"])
+    except StopIteration:
+        st.error("Nama wilayah tidak ditemukan")
