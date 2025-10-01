@@ -1,111 +1,95 @@
 import streamlit as st
-import pandas as pd
 import requests
 import folium
 from streamlit_folium import st_folium
-import plotly.express as px
 
-st.set_page_config(page_title="Prakiraan Cuaca BMKG", layout="wide")
-
-# --- 1. Load CSV kode wilayah ---
-@st.cache_data
-def load_kode_wilayah():
-    df = pd.read_csv("data/kode_wilayah.csv", dtype=str)
-    df.columns = [c.lower() for c in df.columns]
-    return df
-
-kode_df = load_kode_wilayah()
-
-# --- 2. Input lokasi ---
-lokasi = st.text_input("Masukkan Nama Desa, Kecamatan", "Simogirang, Prambon")
-
-# --- 3. Fungsi cari kode wilayah ---
-def cari_kode_wilayah(nama_desa, nama_kec):
-    df_desa = kode_df[kode_df["nama"].str.lower().str.contains(nama_desa.lower(), na=False)]
-    if not df_desa.empty:
-        df_kec = df_desa[df_desa["nama"].str.lower().str.contains(nama_kec.lower(), na=False)]
-        if not df_kec.empty:
-            return df_kec.iloc[0]["kode"], df_kec.iloc[0]["nama"]
-        else:
-            return df_desa.iloc[0]["kode"], df_desa.iloc[0]["nama"]
-
-    df_kec = kode_df[kode_df["nama"].str.lower().str.contains(nama_kec.lower(), na=False)]
-    if not df_kec.empty:
-        return df_kec.iloc[0]["kode"], df_kec.iloc[0]["nama"]
-
-    return None, None
-
-# --- 4. Proses input user ---
-kode, nama_wilayah = None, None
-if "," in lokasi:
-    desa, kec = [x.strip() for x in lokasi.split(",")]
-    kode, nama_wilayah = cari_kode_wilayah(desa, kec)
-
-if kode:
-    st.success(f"Kode wilayah ditemukan: {kode} ({nama_wilayah})")
-
-    # --- 5. Ambil data cuaca dari BMKG ---
+# --- Fungsi ambil data BMKG ---
+def get_bmkg_weather(adm4_code):
+    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={adm4_code}"
     try:
-        url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={kode}"
-        r = requests.get(url, timeout=10)
-        if r.ok:
-            data = r.json()
-            if "data" in data and len(data["data"]) > 0:
-                cuaca = data["data"][0]["cuaca"]
-
-                st.subheader(f"🌦️ Prakiraan Cuaca untuk {nama_wilayah}")
-
-                # --- 6. Weather Card ---
-                for jam in cuaca[:6]:  # tampilkan 6 waktu terdekat
-                    for d in jam:
-                        col1, col2, col3 = st.columns([1, 2, 2])
-                        with col1:
-                            st.image(d["image"], width=60)
-                        with col2:
-                            st.markdown(
-                                f"""
-                                **🕒 {d['local_datetime']}**  
-                                🌡️ {d['t']}°C | 💧 {d['hu']}%  
-                                🌬️ {d['ws']} km/jam ({d['wd']})  
-                                """
-                            )
-                        with col3:
-                            st.write(f"**{d['weather_desc']}**")
-                        st.divider()
-
-                # --- 7. Grafik Tren Cuaca ---
-                st.subheader("📊 Grafik Tren Cuaca 24 Jam ke Depan")
-
-                # Flatten data cuaca jadi dataframe
-                records = []
-                for jam in cuaca:
-                    for d in jam:
-                        records.append({
-                            "waktu": d["local_datetime"],
-                            "suhu": d["t"],
-                            "kelembapan": d["hu"],
-                            "hujan": d["tp"],
-                        })
-                df = pd.DataFrame(records)
-
-                # Grafik Suhu
-                fig_t = px.line(df, x="waktu", y="suhu", markers=True, title="🌡️ Suhu (°C)")
-                st.plotly_chart(fig_t, use_container_width=True)
-
-                # Grafik Kelembapan
-                fig_hu = px.line(df, x="waktu", y="kelembapan", markers=True, title="💧 Kelembapan (%)")
-                st.plotly_chart(fig_hu, use_container_width=True)
-
-                # Grafik Curah Hujan
-                fig_tp = px.bar(df, x="waktu", y="hujan", title="🌧️ Curah Hujan (mm)")
-                st.plotly_chart(fig_tp, use_container_width=True)
-
-            else:
-                st.error("❌ BMKG tidak mengembalikan data prakiraan.")
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
         else:
-            st.error("❌ Gagal ambil data dari BMKG.")
-    except Exception as e:
-        st.error(f"⚠️ Error ambil data BMKG: {e}")
+            return None
+    except Exception:
+        return None
+
+# --- Mapping cuaca ke icon ---
+def get_weather_icon(desc):
+    mapping = {
+        "Cerah": "https://api-apps.bmkg.go.id/storage/icon/cuaca/cerah-am.svg",
+        "Cerah Berawan": "https://api-apps.bmkg.go.id/storage/icon/cuaca/cerah-berawan-am.svg",
+        "Berawan": "https://api-apps.bmkg.go.id/storage/icon/cuaca/berawan-am.svg",
+        "Hujan Ringan": "https://api-apps.bmkg.go.id/storage/icon/cuaca/hujan-ringan-am.svg",
+        "Hujan Sedang": "https://api-apps.bmkg.go.id/storage/icon/cuaca/hujan-sedang-am.svg",
+        "Hujan Lebat": "https://api-apps.bmkg.go.id/storage/icon/cuaca/hujan-lebat-am.svg",
+    }
+    return mapping.get(desc, mapping["Berawan"])
+
+# --- Input Lokasi ---
+st.title("🌦️ Peta Prakiraan Cuaca BMKG (Sliding)")
+
+desa = st.text_input("Masukkan Nama Desa:")
+kecamatan = st.text_input("Masukkan Nama Kecamatan:")
+
+if desa and kecamatan:
+    lokasi = f"{desa},{kecamatan}"
+    st.write(f"📍 Lokasi: **{lokasi}**")
+
+    # Hardcode contoh: Simogirang
+    kode_adm4 = "35.15.02.2018"
+
+    data = get_bmkg_weather(kode_adm4)
+
+    if not data:
+        st.error("❌ BMKG tidak mengembalikan data")
+    else:
+        lokasi_info = data.get("lokasi", {})
+        cuaca_data = data.get("data", [])[0].get("cuaca", [])[0]
+
+        lat = lokasi_info.get("lat", -7.44)
+        lon = lokasi_info.get("lon", 112.58)
+
+        # --- Slider waktu ---
+        times = [item.get("local_datetime", "").split(" ")[1][:5] for item in cuaca_data]
+        time_labels = [t + " WIB" for t in times]
+
+        idx = st.slider("Pilih Waktu Prakiraan", 0, len(time_labels)-1, 0, format="%d")
+        current = cuaca_data[idx]
+
+        jam = time_labels[idx]
+        suhu = current.get("t", "-")
+        hu = current.get("hu", "-")
+        desc = current.get("weather_desc", "-")
+        icon_url = get_weather_icon(desc)
+
+        # --- Buat Peta ---
+        m = folium.Map(location=[lat, lon], zoom_start=13)
+
+        popup_html = f"""
+        <b>Jam:</b> {jam}<br>
+        <b>Cuaca:</b> {desc}<br>
+        <b>Suhu:</b> {suhu}°C<br>
+        <b>Kelembaban:</b> {hu}%
+        """
+
+        folium.Marker(
+            [lat, lon],
+            tooltip=f"{jam} - {desc}",
+            popup=popup_html,
+            icon=folium.CustomIcon(icon_url, icon_size=(60, 60))
+        ).add_to(m)
+
+        # Tampilkan peta
+        st_folium(m, width=700, height=500)
+
+        # --- Detail di bawah peta ---
+        st.subheader("📊 Detail Prakiraan")
+        st.write(f"**Jam:** {jam}")
+        st.write(f"**Cuaca:** {desc}")
+        st.write(f"**Suhu:** {suhu} °C")
+        st.write(f"**Kelembaban:** {hu}%")
 
 else:
-    st.warning("⚠️ Masukkan format: Desa, Kecamatan. Contoh: `Simogirang, Prambon`")
+    st.info("Masukkan format: Desa, Kecamatan. Contoh: `Simogirang, Prambon`")
