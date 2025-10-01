@@ -18,16 +18,27 @@ kode_df = load_kode_wilayah()
 # --- 2. Input lokasi ---
 lokasi = st.text_input("Masukkan Nama Desa, Kecamatan", "Simogirang, Prambon")
 
-# --- 3. Cari kode wilayah ---
+# --- 3. Fungsi cari kode wilayah ---
 def cari_kode_wilayah(nama_desa, nama_kec):
-    df_match = kode_df[
-        (kode_df["nama"].str.lower().str.contains(nama_desa.lower())) &
-        (kode_df["nama"].str.lower().str.contains(nama_kec.lower()))
-    ]
-    if not df_match.empty:
-        return df_match.iloc[0]["kode"], df_match.iloc[0]["nama"]
+    # Cari semua baris yg ada nama desa
+    df_desa = kode_df[kode_df["nama"].str.lower().str.contains(nama_desa.lower(), na=False)]
+    
+    if not df_desa.empty:
+        # Kalau ada lebih dari 1 → filter pakai kecamatan juga
+        df_kec = df_desa[df_desa["nama"].str.lower().str.contains(nama_kec.lower(), na=False)]
+        if not df_kec.empty:
+            return df_kec.iloc[0]["kode"], df_kec.iloc[0]["nama"]
+        else:
+            return df_desa.iloc[0]["kode"], df_desa.iloc[0]["nama"]
+    
+    # Kalau desa ga ketemu, coba langsung cari kecamatan
+    df_kec = kode_df[kode_df["nama"].str.lower().str.contains(nama_kec.lower(), na=False)]
+    if not df_kec.empty:
+        return df_kec.iloc[0]["kode"], df_kec.iloc[0]["nama"]
+
     return None, None
 
+# --- 4. Proses input user ---
 kode, nama_wilayah = None, None
 if "," in lokasi:
     desa, kec = [x.strip() for x in lokasi.split(",")]
@@ -36,7 +47,7 @@ if "," in lokasi:
 if kode:
     st.success(f"Kode wilayah ditemukan: {kode} ({nama_wilayah})")
 
-    # --- 4. Ambil data cuaca dari BMKG ---
+    # --- 5. Ambil data cuaca dari BMKG ---
     try:
         url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={kode}"
         r = requests.get(url, timeout=10)
@@ -47,7 +58,7 @@ if kode:
 
                 st.subheader(f"🌦️ Prakiraan Cuaca untuk {nama_wilayah}")
 
-                # --- 5. Weather Card ---
+                # --- 6. Weather Card ---
                 for jam in cuaca[:6]:  # tampilkan 6 waktu terdekat
                     for d in jam:
                         col1, col2, col3 = st.columns([1, 2, 2])
