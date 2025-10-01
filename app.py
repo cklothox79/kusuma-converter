@@ -1,102 +1,80 @@
 import streamlit as st
-import pandas as pd
 import requests
-from geopy.geocoders import Nominatim
-from streamlit_folium import st_folium
-import folium
-from datetime import datetime
+import pandas as pd
+import plotly.express as px
 
-st.set_page_config(page_title="Prakiraan Cuaca BMKG", layout="wide")
-st.title("🌦️ Prakiraan Cuaca BMKG")
+# === CONFIG ===
+st.set_page_config(page_title="Cuaca BMKG", page_icon="🌦️", layout="wide")
+url = "https://api-apps.bmkg.go.id/publik/prakiraan-cuaca?adm4=35.15.02.2018"
 
-# --- 1. Load CSV kode wilayah ---
-@st.cache_data(ttl=600)
-def load_kode_wilayah():
-    try:
-        df = pd.read_csv("data/kode_wilayah.csv", dtype=str)
-        df.columns = [c.lower() for c in df.columns]
-        return df
-    except Exception as e:
-        st.error(f"⚠️ Error load CSV: {e}")
-        return pd.DataFrame(columns=['kode','nama'])
+st.title("🌦️ Prakiraan Cuaca Desa Simogirang")
 
-kode_df = load_kode_wilayah()
+try:
+    # === GET DATA ===
+    response = requests.get(url)
+    data = response.json()
+    st.success("✅ Data BMKG berhasil diambil")
 
-# --- 2. Input lokasi ---
-lokasi = st.text_input("Masukkan Nama Desa/Kota", "Simogirang, Sidoarjo")
+    # === PARSE DATA CUACA ===
+    cuaca_list = data["data"][0]["cuaca"]
+    records = []
 
-# --- 3. Geocoding ---
-if lokasi:
-    try:
-        geolocator = Nominatim(user_agent="bmkg-app", timeout=10)
-        loc = geolocator.geocode(lokasi)
-        if loc:
-            lat, lon = loc.latitude, loc.longitude
-            st.write(f"📍 Koordinat: {lat:.5f}, {lon:.5f}")
-            st.write(f"🗺️ Alamat: {loc.address}")
+    for item in cuaca_list:
+        for c in item:  # nested list
+            records.append({
+                "datetime": c["local_datetime"],
+                "jam": c["local_datetime"].split(" ")[1][:5],
+                "suhu": c["t"],
+                "kelembapan": c["hu"],
+                "hujan": c["tp"],
+                "deskripsi": c["weather_desc"],
+                "ikon": c["image"],
+                "angin": f'{c["ws"]} km/jam ({c["wd"]})'
+            })
 
-            # --- 4. Cari kode wilayah ---
-            nama_search = lokasi.split(",")[0].strip().lower()
-            match = kode_df[kode_df['nama'].str.lower().str.contains(nama_search)]
-            if not match.empty:
-                kode = match.iloc[0]['kode']
-                st.success(f"Kode Wilayah Ditemukan: {kode}")
-            else:
-                kode = None
-                st.warning("⚠️ Kode wilayah tidak ditemukan di CSV")
+    df = pd.DataFrame(records)
 
-            # --- 5. Peta ---
-            m = folium.Map(location=[lat, lon], zoom_start=12)
-            folium.Marker([lat, lon], popup=lokasi).add_to(m)
-            st_folium(m, width=700, height=500)
+    # === WEATHER CARD ===
+    st.subheader("📌 Prakiraan Cuaca per Jam")
+    cols = st.columns(3)
 
-            # --- 6. Ambil & parsing prakiraan BMKG ---
-            if kode:
-                try:
-                    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={kode}"
-                    r = requests.get(url, timeout=10)
+    for i, row in df.iterrows():
+        with cols[i % 3]:
+            st.markdown(
+                f"""
+                <div style="border-radius:15px; padding:15px; text-align:center; background:#f5f5f5; box-shadow:2px 2px 8px rgba(0,0,0,0.1);">
+                    <h4>{row['jam']}</h4>
+                    <img src="{row['ikon']}" width="60">
+                    <p><b>{row['suhu']}°C</b></p>
+                    <p>{row['deskripsi']}</p>
+                    <p>💧 {row['kelembapan']}%</p>
+                    <p>🌬️ {row['angin']}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-                    if r.ok:
-                        data = r.json()
-                        st.success("✅ Data BMKG diterima")
+    # === GRAFIK TREN ===
+    st.subheader("📊 Tren Cuaca 24 Jam ke Depan")
 
-                        prakiraan = []
-                        data_cuaca = data.get("data", [])
+    tab1, tab2, tab3 = st.tabs(["🌡️ Suhu", "💧 Kelembapan", "🌧️ Hujan"])
 
-                        if isinstance(data_cuaca, list) and len(data_cuaca) > 0:
-                            cuaca_list = data_cuaca[0].get("cuaca", [])
-                            # cuaca_list adalah list di dalam list
-                            for group in cuaca_list:
-                                for t in group:
-                                    jam = t.get("local_datetime", t.get("datetime", "-"))
-                                    try:
-                                        jam = datetime.fromisoformat(jam.replace("Z", "+00:00")).strftime("%d-%m %H:%M")
-                                    except:
-                                        pass
+    with tab1:
+        fig = px.line(df, x="jam", y="suhu", text="suhu",
+                      markers=True, title="Perkiraan Suhu (°C)")
+        fig.update_traces(textposition="top center")
+        st.plotly_chart(fig, use_container_width=True)
 
-                                    prakiraan.append({
-                                        "🕒 Waktu": jam,
-                                        "🌡️ Suhu (°C)": t.get("t", "-"),
-                                        "💧 Kelembaban (%)": t.get("hu", "-"),
-                                        "🌥️ Cuaca": t.get("weather_desc", "-"),
-                                        "🌬️ Angin": f"{t.get('wd', '-')} / {t.get('ws', '-')}",
-                                        "📷 Icon": t.get("image", "")
-                                    })
+    with tab2:
+        fig = px.line(df, x="jam", y="kelembapan", text="kelembapan",
+                      markers=True, title="Perkiraan Kelembapan (%)")
+        fig.update_traces(textposition="top center")
+        st.plotly_chart(fig, use_container_width=True)
 
-                            df_prakiraan = pd.DataFrame(prakiraan)
-                            st.subheader("📊 Tabel Prakiraan Cuaca")
-                            st.dataframe(df_prakiraan, use_container_width=True)
+    with tab3:
+        fig = px.bar(df, x="jam", y="hujan",
+                     title="Perkiraan Curah Hujan (mm)")
+        st.plotly_chart(fig, use_container_width=True)
 
-                        else:
-                            st.warning("⚠️ Data cuaca tidak ditemukan.")
-                            st.json(data)
-
-                    else:
-                        st.warning("⚠️ Gagal ambil data BMKG, cek endpoint/kode wilayah.")
-                        st.info(f"Status code: {r.status_code}")
-                except Exception as e:
-                    st.warning(f"⚠️ Error saat request BMKG: {e}")
-        else:
-            st.error("⚠️ Lokasi tidak ditemukan. Coba nama lain.")
-    except Exception as e:
-        st.error(f"⚠️ Geocoding error: {e}")
+except Exception as e:
+    st.error(f"⚠️ Gagal ambil data BMKG: {e}")
