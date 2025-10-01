@@ -3,24 +3,47 @@ import requests
 import pandas as pd
 import plotly.express as px
 
-# === CONFIG ===
 st.set_page_config(page_title="Cuaca BMKG", page_icon="🌦️", layout="wide")
-url = "https://api-apps.bmkg.go.id/publik/prakiraan-cuaca?adm4=35.15.02.2018"
-
 st.title("🌦️ Prakiraan Cuaca Desa Simogirang")
 
-try:
-    # === GET DATA ===
-    response = requests.get(url)
-    data = response.json()
-    st.success("✅ Data BMKG berhasil diambil")
+# --- ADM CODE ---
+ADM4 = "35.15.02.2018"   # Desa Simogirang
+ADM3 = "35.15.02"        # Kecamatan Prambon
+ADM2 = "35.15"           # Kab. Sidoarjo
 
-    # === PARSE DATA CUACA ===
+def ambil_data(adm_code):
+    url = f"https://api-apps.bmkg.go.id/publik/prakiraan-cuaca?adm4={adm_code}"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.ok and r.text.strip() != "":
+            return r.json()
+        else:
+            return None
+    except Exception:
+        return None
+
+# --- Coba urut ADM4 → ADM3 → ADM2 ---
+data = ambil_data(ADM4)
+if data is None:
+    st.warning("⚠️ Data ADM4 kosong, mencoba ADM3...")
+    data = ambil_data(ADM3)
+if data is None:
+    st.warning("⚠️ Data ADM3 kosong, mencoba ADM2...")
+    data = ambil_data(ADM2)
+
+if data is None:
+    st.error("❌ Gagal ambil data BMKG di semua level wilayah")
+    st.stop()
+
+st.success("✅ Data BMKG berhasil diambil")
+
+# --- Parsing Data ---
+try:
     cuaca_list = data["data"][0]["cuaca"]
     records = []
 
     for item in cuaca_list:
-        for c in item:  # nested list
+        for c in item:
             records.append({
                 "datetime": c["local_datetime"],
                 "jam": c["local_datetime"].split(" ")[1][:5],
@@ -42,7 +65,9 @@ try:
         with cols[i % 3]:
             st.markdown(
                 f"""
-                <div style="border-radius:15px; padding:15px; text-align:center; background:#f5f5f5; box-shadow:2px 2px 8px rgba(0,0,0,0.1);">
+                <div style="border-radius:15px; padding:15px; text-align:center; 
+                            background:#f5f5f5; margin:8px; 
+                            box-shadow:2px 2px 8px rgba(0,0,0,0.1);">
                     <h4>{row['jam']}</h4>
                     <img src="{row['ikon']}" width="60">
                     <p><b>{row['suhu']}°C</b></p>
@@ -77,4 +102,5 @@ try:
         st.plotly_chart(fig, use_container_width=True)
 
 except Exception as e:
-    st.error(f"⚠️ Gagal ambil data BMKG: {e}")
+    st.error(f"⚠️ Gagal parsing data BMKG: {e}")
+    st.json(data)  # debug fallback
