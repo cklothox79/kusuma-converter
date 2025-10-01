@@ -1,4 +1,4 @@
-# streamlit_app_cuaca_final_interaktif.py
+# streamlit_app_cuaca_final_bmkg.py
 import streamlit as st
 import pandas as pd
 import requests
@@ -7,14 +7,14 @@ from streamlit_folium import st_folium
 import folium
 
 st.set_page_config(page_title="Cuaca Perjalanan BMKG", layout="wide")
-st.title("🌦️ Cuaca Perjalanan – BMKG API (Interaktif)")
+st.title("🌦️ Cuaca Perjalanan – BMKG API (Final)")
 
 # ------------------------------
-# Load kode wilayah CSV (nama + kode)
+# Load kode wilayah + lat/lon resmi BMKG
 # ------------------------------
 @st.cache_data
 def load_wilayah():
-    df = pd.read_csv("data/kode_wilayah.csv")  # hanya kode dan nama
+    df = pd.read_csv("data/kode_wilayah_latlon.csv")  # kode,nama,lat,lon
     return df
 
 wilayah_df = load_wilayah()
@@ -60,42 +60,46 @@ def generate_warning(df):
     return warnings
 
 # ------------------------------
-# Input desa/kecamatan (opsional)
+# Input desa/kecamatan
 # ------------------------------
-lokasi_input = st.text_input("Masukkan Desa/Kecamatan (opsional):")
+lokasi_input = st.text_input("Masukkan Desa/Kecamatan:")
+
+lat_input = None
+lon_input = None
+kode_wilayah = None
+
 if lokasi_input:
     row = wilayah_df[wilayah_df['nama'].str.contains(lokasi_input, case=False)]
     if not row.empty:
         kode_wilayah = row.iloc[0]['kode']
-        st.info(f"Kode wilayah: {kode_wilayah}")
+        lat_input = row.iloc[0]['lat']
+        lon_input = row.iloc[0]['lon']
+        st.info(f"Kode wilayah: {kode_wilayah} | Koordinat resmi: {lat_input}, {lon_input}")
     else:
         st.warning("Nama desa/kecamatan tidak ditemukan di CSV.")
 
 # ------------------------------
-# Peta interaktif
+# Peta interaktif (hanya visualisasi)
 # ------------------------------
-st.subheader("🗺️ Klik peta untuk memilih lokasi")
-m = folium.Map(location=[-8.0, 112.6], zoom_start=10)
-map_data = st_folium(m, width=700, height=500)
-
-lat_input = None
-lon_input = None
-if map_data and map_data.get("last_clicked"):
-    lat_input = map_data["last_clicked"]["lat"]
-    lon_input = map_data["last_clicked"]["lng"]
-    st.success(f"Koordinat dipilih: {lat_input:.6f}, {lon_input:.6f}")
+st.subheader("🗺️ Lokasi Desa/Kecamatan")
+if lat_input and lon_input:
+    m = folium.Map(location=[lat_input, lon_input], zoom_start=12)
+    folium.Marker([lat_input, lon_input], tooltip=lokasi_input).add_to(m)
+    st_folium(m, width=700, height=500)
+else:
+    st.info("Masukkan desa/kecamatan untuk menampilkan lokasi di peta.")
 
 # ------------------------------
 # Tombol Ambil Data
 # ------------------------------
 if st.button("Ambil Prakiraan Cuaca"):
-    if lat_input is None or lon_input is None:
-        st.error("Klik peta untuk memilih lokasi terlebih dahulu!")
+    if not lat_input or not lon_input:
+        st.error("Silakan masukkan desa/kecamatan yang valid terlebih dahulu!")
     else:
         st.info("Mengambil data BMKG...")
         data_raw = get_forecast_by_coords(lat_input, lon_input)
         if not data_raw:
-            st.error("Gagal mengambil data. Pastikan koordinat valid.")
+            st.error("Gagal mengambil data. Pastikan koordinat valid dan API BMKG tersedia.")
         else:
             df = process_forecast_data(data_raw)
 
