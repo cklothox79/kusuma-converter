@@ -1,114 +1,89 @@
 import streamlit as st
+import pandas as pd
 import requests
-import folium
 from streamlit_folium import st_folium
+import folium
+from geopy.distance import geodesic
 
-# --- Fungsi ambil data BMKG ---
-def get_bmkg_weather(adm4_code):
-    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={adm4_code}"
+# ==============================
+# Load kode wilayah
+# ==============================
+@st.cache_data
+def load_wilayah():
+    df = pd.read_csv("kode_wilayah.csv", dtype=str)
+    df = df.dropna()
+    return df
+
+wilayah_df = load_wilayah()
+
+# ==============================
+# Fungsi cari lokasi terdekat
+# ==============================
+def cari_wilayah_terdekat(lat, lon):
+    wilayah_df["lat"] = wilayah_df["lat"].astype(float)
+    wilayah_df["lon"] = wilayah_df["lon"].astype(float)
+
+    wilayah_df["distance"] = wilayah_df.apply(
+        lambda row: geodesic((lat, lon), (row["lat"], row["lon"])).meters, axis=1
+    )
+    wilayah_df_sorted = wilayah_df.sort_values("distance")
+    return wilayah_df_sorted.iloc[0]  # ambil terdekat
+
+# ==============================
+# Ambil data BMKG
+# ==============================
+def ambil_data_bmkg(adm_code):
+    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={adm_code}"
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
-    except Exception:
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
+        return res.json()
+    except Exception as e:
+        st.error(f"⚠️ Gagal ambil data BMKG: {e}")
         return None
 
-# --- Mapping cuaca ke icon ---
-def get_weather_icon(desc):
-    mapping = {
-        "Cerah": "https://api-apps.bmkg.go.id/storage/icon/cuaca/cerah-am.svg",
-        "Cerah Berawan": "https://api-apps.bmkg.go.id/storage/icon/cuaca/cerah-berawan-am.svg",
-        "Berawan": "https://api-apps.bmkg.go.id/storage/icon/cuaca/berawan-am.svg",
-        "Hujan Ringan": "https://api-apps.bmkg.go.id/storage/icon/cuaca/hujan-ringan-am.svg",
-        "Hujan Sedang": "https://api-apps.bmkg.go.id/storage/icon/cuaca/hujan-sedang-am.svg",
-        "Hujan Lebat": "https://api-apps.bmkg.go.id/storage/icon/cuaca/hujan-lebat-am.svg",
-    }
-    return mapping.get(desc, mapping["Berawan"])
+# ==============================
+# UI
+# ==============================
+st.title("🌦️ Prakiraan Cuaca Interaktif BMKG")
 
-# --- Input Lokasi ---
-st.set_page_config(page_title="🌦️ Cuaca Desa", layout="wide")
-st.title("🌦️ Peta & Peringatan Cuaca BMKG")
+tab1, tab2 = st.tabs(["📍 Input Manual", "🗺️ Klik Peta"])
 
-desa = st.text_input("Masukkan Nama Desa:")
-kecamatan = st.text_input("Masukkan Nama Kecamatan:")
+with tab1:
+    lokasi_input = st.text_input("Masukkan Nama Desa, Kecamatan", "Simogirang, Prambon")
+    if lokasi_input:
+        desa, kecamatan = [x.strip() for x in lokasi_input.split(",")]
+        row = wilayah_df[
+            (wilayah_df["desa"].str.lower() == desa.lower()) &
+            (wilayah_df["kecamatan"].str.lower() == kecamatan.lower())
+        ]
+        if not row.empty:
+            kode = row.iloc[0]["kode"]
+            data = ambil_data_bmkg(kode)
+            if data:
+                st.success(f"✅ Data BMKG untuk {desa}, {kecamatan}")
+                st.json(data)  # tampilkan JSON (nanti bisa rapikan tabel/visual)
+        else:
+            st.warning("❌ Wilayah tidak ditemukan di database.")
 
-if desa and kecamatan:
-    lokasi = f"{desa},{kecamatan}"
-    st.write(f"📍 Lokasi: **{lokasi}**")
+with tab2:
+    st.write("Klik di peta untuk memilih lokasi:")
+    m = folium.Map(location=[-7.44, 112.58], zoom_start=11)
+    folium.Marker([-7.44, 112.58], tooltip="Simogirang, Prambon").add_to(m)
 
-    # Hardcode contoh: Simogirang
-    kode_adm4 = "35.15.02.2018"
+    map_data = st_folium(m, width=700, height=450)
 
-    data = get_bmkg_weather(kode_adm4)
+    if map_data and map_data["last_clicked"]:
+        lat = map_data["last_clicked"]["lat"]
+        lon = map_data["last_clicked"]["lng"]
 
-    if not data:
-        st.error("❌ BMKG tidak mengembalikan data")
-    else:
-        lokasi_info = data.get("lokasi", {})
-        cuaca_data = data.get("data", [])[0].get("cuaca", [])[0]
+        st.info(f"📍 Titik dipilih: {lat:.4f}, {lon:.4f}")
 
-        lat = lokasi_info.get("lat", -7.44)
-        lon = lokasi_info.get("lon", 112.58)
+        wilayah = cari_wilayah_terdekat(lat, lon)
+        st.write(f"🗂️ Lokasi terdekat: **{wilayah['desa']}, {wilayah['kecamatan']}**")
 
-        # --- Pilih waktu pakai dropdown ---
-        times = [item.get("local_datetime", "").split(" ")[1][:5] for item in cuaca_data]
-        time_labels = [t + " WIB" for t in times]
-
-        selected_time = st.selectbox("⏰ Pilih Waktu Prakiraan", options=time_labels)
-        idx = time_labels.index(selected_time)
-        current = cuaca_data[idx]
-
-        jam = time_labels[idx]
-        suhu = current.get("t", "-")
-        hu = current.get("hu", "-")
-        desc = current.get("weather_desc", "-")
-        ws = current.get("ws", "-")
-        tp = current.get("tp", "-")
-        icon_url = get_weather_icon(desc)
-
-        # --- Layout 2 kolom ---
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            # Buat peta
-            m = folium.Map(location=[lat, lon], zoom_start=13)
-
-            popup_html = f"""
-            <b>Jam:</b> {jam}<br>
-            <b>Cuaca:</b> {desc}<br>
-            <b>Suhu:</b> {suhu}°C<br>
-            <b>Kelembaban:</b> {hu}%
-            """
-
-            folium.Marker(
-                [lat, lon],
-                tooltip=f"{jam} - {desc}",
-                popup=popup_html,
-                icon=folium.CustomIcon(icon_url, icon_size=(60, 60))
-            ).add_to(m)
-
-            st_folium(m, width=750, height=500)
-
-        with col2:
-            # Panel peringatan
-            st.subheader("⚠️ Peringatan")
-            if tp and float(tp) > 10:
-                st.error("⚠️ Waspada potensi hujan lebat!")
-            elif desc.lower().startswith("hujan"):
-                st.warning(f"🌧️ Diperkirakan {desc.lower()} pada {jam}")
-            else:
-                st.info("✅ Tidak ada peringatan cuaca signifikan")
-
-            # Detail prakiraan
-            st.subheader("📊 Detail Prakiraan")
-            st.write(f"**Jam:** {jam}")
-            st.write(f"**Cuaca:** {desc}")
-            st.write(f"**Suhu:** {suhu} °C")
-            st.write(f"**Kelembaban:** {hu}%")
-            st.write(f"**Curah Hujan:** {tp} mm")
-            st.write(f"**Kecepatan Angin:** {ws} km/jam")
-
-else:
-    st.info("Masukkan format: Desa, Kecamatan. Contoh: `Simogirang, Prambon`")
+        kode = wilayah["kode"]
+        data = ambil_data_bmkg(kode)
+        if data:
+            st.success(f"✅ Data BMKG untuk {wilayah['desa']}, {wilayah['kecamatan']}")
+            st.json(data)  # nanti bisa tampilkan tabel/visual
