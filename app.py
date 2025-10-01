@@ -28,7 +28,7 @@ def get_weather_icon(desc):
     return mapping.get(desc, mapping["Berawan"])
 
 # --- Input Lokasi ---
-st.title("🌦️ Peta Prakiraan Cuaca BMKG (Sliding)")
+st.title("🌦️ Peta Prakiraan Cuaca BMKG")
 
 desa = st.text_input("Masukkan Nama Desa:")
 kecamatan = st.text_input("Masukkan Nama Kecamatan:")
@@ -51,11 +51,12 @@ if desa and kecamatan:
         lat = lokasi_info.get("lat", -7.44)
         lon = lokasi_info.get("lon", 112.58)
 
-        # --- Slider waktu ---
+        # --- Pilih waktu pakai dropdown ---
         times = [item.get("local_datetime", "").split(" ")[1][:5] for item in cuaca_data]
         time_labels = [t + " WIB" for t in times]
 
-        idx = st.slider("Pilih Waktu Prakiraan", 0, len(time_labels)-1, 0, format="%d")
+        selected_time = st.selectbox("⏰ Pilih Waktu Prakiraan", options=time_labels)
+        idx = time_labels.index(selected_time)
         current = cuaca_data[idx]
 
         jam = time_labels[idx]
