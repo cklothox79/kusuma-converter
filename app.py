@@ -50,7 +50,7 @@ if lokasi:
             folium.Marker([lat, lon], popup=lokasi).add_to(m)
             st_folium(m, width=700, height=500)
 
-            # --- 6. Ambil & tampilkan prakiraan BMKG ---
+            # --- 6. Ambil & parsing prakiraan BMKG ---
             if kode:
                 try:
                     url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={kode}"
@@ -60,26 +60,35 @@ if lokasi:
                         data = r.json()
                         st.success("✅ Data BMKG diterima")
 
-                        # --- Parsing data ke tabel ---
-                        try:
-                            prakiraan = []
-                            timeseries = data.get("data", {}).get("cuaca", [])
-                            for t in timeseries:
-                                jam = datetime.fromisoformat(t.get("datetime")).strftime("%d-%m %H:%M")
-                                prakiraan.append({
-                                    "🕒 Waktu": jam,
-                                    "🌡️ Suhu (°C)": t.get("t", "-"),
-                                    "💧 Kelembaban (%)": t.get("hu", "-"),
-                                    "🌥️ Cuaca": t.get("weather", "-"),
-                                    "🌬️ Angin": f"{t.get('wd', '-')} / {t.get('ws', '-')}"
-                                })
+                        prakiraan = []
+                        data_cuaca = data.get("data", [])
+
+                        if isinstance(data_cuaca, list) and len(data_cuaca) > 0:
+                            cuaca_list = data_cuaca[0].get("cuaca", [])
+                            # cuaca_list adalah list di dalam list
+                            for group in cuaca_list:
+                                for t in group:
+                                    jam = t.get("local_datetime", t.get("datetime", "-"))
+                                    try:
+                                        jam = datetime.fromisoformat(jam.replace("Z", "+00:00")).strftime("%d-%m %H:%M")
+                                    except:
+                                        pass
+
+                                    prakiraan.append({
+                                        "🕒 Waktu": jam,
+                                        "🌡️ Suhu (°C)": t.get("t", "-"),
+                                        "💧 Kelembaban (%)": t.get("hu", "-"),
+                                        "🌥️ Cuaca": t.get("weather_desc", "-"),
+                                        "🌬️ Angin": f"{t.get('wd', '-')} / {t.get('ws', '-')}",
+                                        "📷 Icon": t.get("image", "")
+                                    })
 
                             df_prakiraan = pd.DataFrame(prakiraan)
                             st.subheader("📊 Tabel Prakiraan Cuaca")
                             st.dataframe(df_prakiraan, use_container_width=True)
 
-                        except Exception as e:
-                            st.error(f"⚠️ Gagal parsing data BMKG: {e}")
+                        else:
+                            st.warning("⚠️ Data cuaca tidak ditemukan.")
                             st.json(data)
 
                     else:
