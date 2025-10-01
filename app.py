@@ -1,4 +1,4 @@
-# streamlit_app_cuaca_perjalanan.py
+# streamlit_app_cuaca_perjalanan_final.py
 import streamlit as st
 import pandas as pd
 import requests
@@ -10,14 +10,14 @@ st.set_page_config(page_title="Cuaca Perjalanan BMKG", layout="wide")
 st.title("🌦️ Cuaca Perjalanan – BMKG API")
 
 # ------------------------------
-# Load lookup lokasi BIG/BMKG
+# Load lookup kode wilayah
 # ------------------------------
 @st.cache_data
-def load_lokasi():
-    df_lokasi = pd.read_csv("data_lokasi.csv")  # kode,nama,lat,lon
-    return df_lokasi
+def load_wilayah():
+    df = pd.read_csv("data/kode_wilayah.csv")  # CSV hanya kode dan nama
+    return df
 
-lokasi_df = load_lokasi()
+wilayah_df = load_wilayah()
 
 # ------------------------------
 # Fungsi bantu
@@ -68,15 +68,14 @@ lokasi_input = st.sidebar.text_input("Nama Desa/Kecamatan (opsional)")
 lat_input = st.sidebar.number_input("Latitude", value=0.0, format="%.6f")
 lon_input = st.sidebar.number_input("Longitude", value=0.0, format="%.6f")
 
-# Jika input nama desa/kecamatan
+# Cari kode wilayah dari nama desa/kecamatan
 if lokasi_input:
-    row = lokasi_df[lokasi_df['nama'].str.contains(lokasi_input, case=False)]
+    row = wilayah_df[wilayah_df['nama'].str.contains(lokasi_input, case=False)]
     if not row.empty:
-        lat_input = float(row.iloc[0]['lat'])
-        lon_input = float(row.iloc[0]['lon'])
-        st.sidebar.success(f"Koordinat otomatis ditemukan: {lat_input}, {lon_input}")
+        kode_wilayah = row.iloc[0]['kode']
+        st.sidebar.success(f"Kode wilayah: {kode_wilayah}")
     else:
-        st.sidebar.warning("Lokasi tidak ditemukan. Gunakan koordinat manual atau klik peta.")
+        st.sidebar.warning("Nama desa/kecamatan tidak ditemukan di CSV. Gunakan koordinat manual atau klik peta.")
 
 # ------------------------------
 # Peta Interaktif
@@ -85,8 +84,6 @@ st.subheader("🗺️ Klik peta untuk memilih lokasi")
 m = folium.Map(location=[-8.0, 112.6], zoom_start=10)
 marker = folium.Marker([lat_input, lon_input], tooltip="Lokasi Terpilih")
 marker.add_to(m)
-
-# Tampilkan peta
 map_data = st_folium(m, width=700, height=500)
 
 # Update koordinat jika klik peta
@@ -100,7 +97,7 @@ if map_data and map_data.get("last_clicked"):
 # ------------------------------
 if st.sidebar.button("Ambil Prakiraan Cuaca"):
     if lat_input == 0.0 and lon_input == 0.0:
-        st.error("Masukkan nama lokasi atau klik peta!")
+        st.error("Masukkan koordinat atau klik peta!")
     else:
         st.info("Mengambil data BMKG...")
         data_raw = get_forecast_by_coords(lat_input, lon_input)
