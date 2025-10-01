@@ -28,7 +28,8 @@ def get_weather_icon(desc):
     return mapping.get(desc, mapping["Berawan"])
 
 # --- Input Lokasi ---
-st.title("🌦️ Peta Prakiraan Cuaca BMKG")
+st.set_page_config(page_title="🌦️ Cuaca Desa", layout="wide")
+st.title("🌦️ Peta & Peringatan Cuaca BMKG")
 
 desa = st.text_input("Masukkan Nama Desa:")
 kecamatan = st.text_input("Masukkan Nama Kecamatan:")
@@ -63,34 +64,51 @@ if desa and kecamatan:
         suhu = current.get("t", "-")
         hu = current.get("hu", "-")
         desc = current.get("weather_desc", "-")
+        ws = current.get("ws", "-")
+        tp = current.get("tp", "-")
         icon_url = get_weather_icon(desc)
 
-        # --- Buat Peta ---
-        m = folium.Map(location=[lat, lon], zoom_start=13)
+        # --- Layout 2 kolom ---
+        col1, col2 = st.columns([2, 1])
 
-        popup_html = f"""
-        <b>Jam:</b> {jam}<br>
-        <b>Cuaca:</b> {desc}<br>
-        <b>Suhu:</b> {suhu}°C<br>
-        <b>Kelembaban:</b> {hu}%
-        """
+        with col1:
+            # Buat peta
+            m = folium.Map(location=[lat, lon], zoom_start=13)
 
-        folium.Marker(
-            [lat, lon],
-            tooltip=f"{jam} - {desc}",
-            popup=popup_html,
-            icon=folium.CustomIcon(icon_url, icon_size=(60, 60))
-        ).add_to(m)
+            popup_html = f"""
+            <b>Jam:</b> {jam}<br>
+            <b>Cuaca:</b> {desc}<br>
+            <b>Suhu:</b> {suhu}°C<br>
+            <b>Kelembaban:</b> {hu}%
+            """
 
-        # Tampilkan peta
-        st_folium(m, width=700, height=500)
+            folium.Marker(
+                [lat, lon],
+                tooltip=f"{jam} - {desc}",
+                popup=popup_html,
+                icon=folium.CustomIcon(icon_url, icon_size=(60, 60))
+            ).add_to(m)
 
-        # --- Detail di bawah peta ---
-        st.subheader("📊 Detail Prakiraan")
-        st.write(f"**Jam:** {jam}")
-        st.write(f"**Cuaca:** {desc}")
-        st.write(f"**Suhu:** {suhu} °C")
-        st.write(f"**Kelembaban:** {hu}%")
+            st_folium(m, width=750, height=500)
+
+        with col2:
+            # Panel peringatan
+            st.subheader("⚠️ Peringatan")
+            if tp and float(tp) > 10:
+                st.error("⚠️ Waspada potensi hujan lebat!")
+            elif desc.lower().startswith("hujan"):
+                st.warning(f"🌧️ Diperkirakan {desc.lower()} pada {jam}")
+            else:
+                st.info("✅ Tidak ada peringatan cuaca signifikan")
+
+            # Detail prakiraan
+            st.subheader("📊 Detail Prakiraan")
+            st.write(f"**Jam:** {jam}")
+            st.write(f"**Cuaca:** {desc}")
+            st.write(f"**Suhu:** {suhu} °C")
+            st.write(f"**Kelembaban:** {hu}%")
+            st.write(f"**Curah Hujan:** {tp} mm")
+            st.write(f"**Kecepatan Angin:** {ws} km/jam")
 
 else:
     st.info("Masukkan format: Desa, Kecamatan. Contoh: `Simogirang, Prambon`")
