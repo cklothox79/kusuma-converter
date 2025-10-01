@@ -1,28 +1,19 @@
-# streamlit_app_cuaca_perjalanan_final.py
+# streamlit_app_cuaca_sederhana.py
 import streamlit as st
 import pandas as pd
 import requests
 import plotly.express as px
-from streamlit_folium import st_folium
-import folium
 
-st.set_page_config(page_title="Cuaca Perjalanan BMKG", layout="wide")
-st.title("🌦️ Cuaca Perjalanan – BMKG API")
-
-# ------------------------------
-# Load lookup kode wilayah
-# ------------------------------
-@st.cache_data
-def load_wilayah():
-    df = pd.read_csv("data/kode_wilayah.csv")  # CSV hanya kode dan nama
-    return df
-
-wilayah_df = load_wilayah()
+st.set_page_config(page_title="Cuaca Sederhana BMKG", layout="wide")
+st.title("🌦️ Prakiraan Cuaca – BMKG (Sederhana)")
 
 # ------------------------------
 # Fungsi bantu
 # ------------------------------
 def get_forecast_by_coords(lat, lon):
+    """
+    Ambil data BMKG berdasarkan koordinat
+    """
     url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?lat={lat}&lon={lon}"
     try:
         response = requests.get(url)
@@ -60,72 +51,55 @@ def generate_warning(df):
     return warnings
 
 # ------------------------------
-# Sidebar Input
+# Input lokasi (satu kotak teks)
 # ------------------------------
-st.sidebar.header("Pilih Lokasi")
-lokasi_input = st.sidebar.text_input("Nama Desa/Kecamatan (opsional)")
+lokasi_input = st.text_input("Masukkan Desa/Kecamatan:", "")
 
-lat_input = st.sidebar.number_input("Latitude", value=0.0, format="%.6f")
-lon_input = st.sidebar.number_input("Longitude", value=0.0, format="%.6f")
-
-# Cari kode wilayah dari nama desa/kecamatan
-if lokasi_input:
-    row = wilayah_df[wilayah_df['nama'].str.contains(lokasi_input, case=False)]
-    if not row.empty:
-        kode_wilayah = row.iloc[0]['kode']
-        st.sidebar.success(f"Kode wilayah: {kode_wilayah}")
-    else:
-        st.sidebar.warning("Nama desa/kecamatan tidak ditemukan di CSV. Gunakan koordinat manual atau klik peta.")
-
-# ------------------------------
-# Peta Interaktif
-# ------------------------------
-st.subheader("🗺️ Klik peta untuk memilih lokasi")
-m = folium.Map(location=[-8.0, 112.6], zoom_start=10)
-marker = folium.Marker([lat_input, lon_input], tooltip="Lokasi Terpilih")
-marker.add_to(m)
-map_data = st_folium(m, width=700, height=500)
-
-# Update koordinat jika klik peta
-if map_data and map_data.get("last_clicked"):
-    lat_input = map_data["last_clicked"]["lat"]
-    lon_input = map_data["last_clicked"]["lng"]
-    st.sidebar.info(f"Koordinat dari klik peta: {lat_input:.6f}, {lon_input:.6f}")
-
-# ------------------------------
 # Tombol Ambil Data
-# ------------------------------
-if st.sidebar.button("Ambil Prakiraan Cuaca"):
-    if lat_input == 0.0 and lon_input == 0.0:
-        st.error("Masukkan koordinat atau klik peta!")
+if st.button("Ambil Prakiraan Cuaca"):
+    if not lokasi_input:
+        st.error("Silakan masukkan nama desa/kecamatan!")
     else:
-        st.info("Mengambil data BMKG...")
-        data_raw = get_forecast_by_coords(lat_input, lon_input)
-        if not data_raw:
-            st.error("Gagal mengambil data. Pastikan koordinat valid.")
-        else:
-            df = process_forecast_data(data_raw)
-            
-            # Tabel
-            st.subheader("📋 Tabel Prakiraan Cuaca")
-            st.dataframe(df)
-            
-            # Download CSV
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Unduh CSV", data=csv, file_name="prakiraan_cuaca.csv", mime="text/csv")
-            
-            # Grafik
-            st.subheader("📊 Grafik Suhu & Curah Hujan")
-            fig_suhu = px.line(df, x="Tanggal", y=["SuhuMin", "SuhuMax"], markers=True, title="Suhu (°C)")
-            fig_hujan = px.bar(df, x="Tanggal", y="CurahHujan(mm)", title="Curah Hujan (mm)")
-            st.plotly_chart(fig_suhu, use_container_width=True)
-            st.plotly_chart(fig_hujan, use_container_width=True)
-            
-            # Warning
-            st.subheader("⚠️ Peringatan Cuaca Buruk")
-            warnings = generate_warning(df)
-            if warnings:
-                for w in warnings:
-                    st.warning(w)
+        # Untuk versi simpel ini, kita asumsikan pengguna tahu koordinat
+        # atau klik peta bisa ditambahkan nanti. Saat ini pakai input manual.
+        # Contoh hardcode untuk demo: Simogirang, Prambon
+        lokasi_coords = {
+            "Simogirang": (-8.0592, 112.5989),
+            # Tambahkan desa lain sesuai kebutuhan
+        }
+
+        if lokasi_input in lokasi_coords:
+            lat, lon = lokasi_coords[lokasi_input]
+            st.info(f"Koordinat otomatis: {lat}, {lon}")
+            data_raw = get_forecast_by_coords(lat, lon)
+
+            if not data_raw:
+                st.error("Gagal mengambil data. Pastikan koordinat valid.")
             else:
-                st.success("Tidak ada cuaca ekstrem terdeteksi.")
+                df = process_forecast_data(data_raw)
+
+                # Tabel
+                st.subheader("📋 Tabel Prakiraan Cuaca")
+                st.dataframe(df)
+
+                # Download CSV
+                csv = df.to_csv(index=False).encode("utf-8")
+                st.download_button("⬇️ Unduh CSV", data=csv, file_name="prakiraan_cuaca.csv", mime="text/csv")
+
+                # Grafik
+                st.subheader("📊 Grafik Suhu & Curah Hujan")
+                fig_suhu = px.line(df, x="Tanggal", y=["SuhuMin", "SuhuMax"], markers=True, title="Suhu (°C)")
+                fig_hujan = px.bar(df, x="Tanggal", y="CurahHujan(mm)", title="Curah Hujan (mm)")
+                st.plotly_chart(fig_suhu, use_container_width=True)
+                st.plotly_chart(fig_hujan, use_container_width=True)
+
+                # Warning
+                st.subheader("⚠️ Peringatan Cuaca Buruk")
+                warnings = generate_warning(df)
+                if warnings:
+                    for w in warnings:
+                        st.warning(w)
+                else:
+                    st.success("Tidak ada cuaca ekstrem terdeteksi.")
+        else:
+            st.warning("Desa/Kecamatan tidak ada di database demo. Silakan tambahkan koordinatnya.")
