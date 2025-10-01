@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import folium
 from streamlit_folium import st_folium
+import plotly.express as px
 
 st.set_page_config(page_title="Prakiraan Cuaca BMKG", layout="wide")
 
@@ -20,18 +21,14 @@ lokasi = st.text_input("Masukkan Nama Desa, Kecamatan", "Simogirang, Prambon")
 
 # --- 3. Fungsi cari kode wilayah ---
 def cari_kode_wilayah(nama_desa, nama_kec):
-    # Cari semua baris yg ada nama desa
     df_desa = kode_df[kode_df["nama"].str.lower().str.contains(nama_desa.lower(), na=False)]
-    
     if not df_desa.empty:
-        # Kalau ada lebih dari 1 → filter pakai kecamatan juga
         df_kec = df_desa[df_desa["nama"].str.lower().str.contains(nama_kec.lower(), na=False)]
         if not df_kec.empty:
             return df_kec.iloc[0]["kode"], df_kec.iloc[0]["nama"]
         else:
             return df_desa.iloc[0]["kode"], df_desa.iloc[0]["nama"]
-    
-    # Kalau desa ga ketemu, coba langsung cari kecamatan
+
     df_kec = kode_df[kode_df["nama"].str.lower().str.contains(nama_kec.lower(), na=False)]
     if not df_kec.empty:
         return df_kec.iloc[0]["kode"], df_kec.iloc[0]["nama"]
@@ -75,6 +72,34 @@ if kode:
                         with col3:
                             st.write(f"**{d['weather_desc']}**")
                         st.divider()
+
+                # --- 7. Grafik Tren Cuaca ---
+                st.subheader("📊 Grafik Tren Cuaca 24 Jam ke Depan")
+
+                # Flatten data cuaca jadi dataframe
+                records = []
+                for jam in cuaca:
+                    for d in jam:
+                        records.append({
+                            "waktu": d["local_datetime"],
+                            "suhu": d["t"],
+                            "kelembapan": d["hu"],
+                            "hujan": d["tp"],
+                        })
+                df = pd.DataFrame(records)
+
+                # Grafik Suhu
+                fig_t = px.line(df, x="waktu", y="suhu", markers=True, title="🌡️ Suhu (°C)")
+                st.plotly_chart(fig_t, use_container_width=True)
+
+                # Grafik Kelembapan
+                fig_hu = px.line(df, x="waktu", y="kelembapan", markers=True, title="💧 Kelembapan (%)")
+                st.plotly_chart(fig_hu, use_container_width=True)
+
+                # Grafik Curah Hujan
+                fig_tp = px.bar(df, x="waktu", y="hujan", title="🌧️ Curah Hujan (mm)")
+                st.plotly_chart(fig_tp, use_container_width=True)
+
             else:
                 st.error("❌ BMKG tidak mengembalikan data prakiraan.")
         else:
