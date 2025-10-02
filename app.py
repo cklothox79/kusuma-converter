@@ -1,128 +1,86 @@
-# streamlit_app_cuaca_final_bmkg.py
 import streamlit as st
 import pandas as pd
 import requests
-import plotly.express as px
-from streamlit_folium import st_folium
 import folium
+from streamlit_folium import st_folium
 
-st.set_page_config(page_title="Cuaca Perjalanan BMKG", layout="wide")
-st.title("🌦️ Cuaca Perjalanan – BMKG API (Final)")
+st.set_page_config(page_title="Prakiraan Cuaca BMKG", layout="wide")
 
-# ------------------------------
-# Load kode wilayah + lat/lon resmi BMKG
-# ------------------------------
+# --- 1. Load CSV kode wilayah ---
 @st.cache_data
-def load_wilayah():
-    df = pd.read_csv("data/kode_wilayah_latlon.csv")  # kode,nama,lat,lon
+def load_kode_wilayah():
+    df = pd.read_csv("data/kode_wilayah.csv", dtype=str)
+    df.columns = [c.lower() for c in df.columns]
     return df
 
-wilayah_df = load_wilayah()
+kode_df = load_kode_wilayah()
 
-# ------------------------------
-# Fungsi bantu
-# ------------------------------
-def get_forecast_by_coords(lat, lon):
-    url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?lat={lat}&lon={lon}"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json()
-    except:
-        return None
+# --- 2. Input lokasi ---
+lokasi = st.text_input("Masukkan Nama Desa, Kecamatan", "Simogirang, Prambon")
 
-def process_forecast_data(raw_data):
-    rows = []
-    for item in raw_data.get('prakiraan', []):
-        rows.append({
-            "Tanggal": item['tanggal'],
-            "Jam": item['jam'],
-            "SuhuMin": item['suhu_min'],
-            "SuhuMax": item['suhu_max'],
-            "Cuaca": item['cuaca'],
-            "CurahHujan(mm)": item['curah_hujan'],
-            "Kelembaban(%)": item['kelembaban'],
-            "Angin(km/jam)": item['angin']
-        })
-    return pd.DataFrame(rows)
-
-def generate_warning(df):
-    warnings = []
-    for i, row in df.iterrows():
-        if row['CurahHujan(mm)'] >= 50:
-            warnings.append(f"{row['Tanggal']} {row['Jam']}: Hujan lebat!")
-        if row['Angin(km/jam)'] >= 20:
-            warnings.append(f"{row['Tanggal']} {row['Jam']}: Angin kencang!")
-        if row['SuhuMax'] >= 35:
-            warnings.append(f"{row['Tanggal']} {row['Jam']}: Suhu sangat panas!")
-        if row['SuhuMin'] <= 15:
-            warnings.append(f"{row['Tanggal']} {row['Jam']}: Suhu sangat dingin!")
-    return warnings
-
-# ------------------------------
-# Input desa/kecamatan
-# ------------------------------
-lokasi_input = st.text_input("Masukkan Desa/Kecamatan:")
-
-lat_input = None
-lon_input = None
-kode_wilayah = None
-
-if lokasi_input:
-    row = wilayah_df[wilayah_df['nama'].str.contains(lokasi_input, case=False)]
-    if not row.empty:
-        kode_wilayah = row.iloc[0]['kode']
-        lat_input = row.iloc[0]['lat']
-        lon_input = row.iloc[0]['lon']
-        st.info(f"Kode wilayah: {kode_wilayah} | Koordinat resmi: {lat_input}, {lon_input}")
-    else:
-        st.warning("Nama desa/kecamatan tidak ditemukan di CSV.")
-
-# ------------------------------
-# Peta interaktif (hanya visualisasi)
-# ------------------------------
-st.subheader("🗺️ Lokasi Desa/Kecamatan")
-if lat_input and lon_input:
-    m = folium.Map(location=[lat_input, lon_input], zoom_start=12)
-    folium.Marker([lat_input, lon_input], tooltip=lokasi_input).add_to(m)
-    st_folium(m, width=700, height=500)
-else:
-    st.info("Masukkan desa/kecamatan untuk menampilkan lokasi di peta.")
-
-# ------------------------------
-# Tombol Ambil Data
-# ------------------------------
-if st.button("Ambil Prakiraan Cuaca"):
-    if not lat_input or not lon_input:
-        st.error("Silakan masukkan desa/kecamatan yang valid terlebih dahulu!")
-    else:
-        st.info("Mengambil data BMKG...")
-        data_raw = get_forecast_by_coords(lat_input, lon_input)
-        if not data_raw:
-            st.error("Gagal mengambil data. Pastikan koordinat valid dan API BMKG tersedia.")
+# --- 3. Fungsi cari kode wilayah ---
+def cari_kode_wilayah(nama_desa, nama_kec):
+    # Cari semua baris yg ada nama desa
+    df_desa = kode_df[kode_df["nama"].str.lower().str.contains(nama_desa.lower(), na=False)]
+    
+    if not df_desa.empty:
+        # Kalau ada lebih dari 1 → filter pakai kecamatan juga
+        df_kec = df_desa[df_desa["nama"].str.lower().str.contains(nama_kec.lower(), na=False)]
+        if not df_kec.empty:
+            return df_kec.iloc[0]["kode"], df_kec.iloc[0]["nama"]
         else:
-            df = process_forecast_data(data_raw)
+            return df_desa.iloc[0]["kode"], df_desa.iloc[0]["nama"]
+    
+    # Kalau desa ga ketemu, coba langsung cari kecamatan
+    df_kec = kode_df[kode_df["nama"].str.lower().str.contains(nama_kec.lower(), na=False)]
+    if not df_kec.empty:
+        return df_kec.iloc[0]["kode"], df_kec.iloc[0]["nama"]
 
-            # Tabel
-            st.subheader("📋 Tabel Prakiraan Cuaca")
-            st.dataframe(df)
+    return None, None
 
-            # Download CSV
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Unduh CSV", data=csv, file_name="prakiraan_cuaca.csv", mime="text/csv")
+# --- 4. Proses input user ---
+kode, nama_wilayah = None, None
+if "," in lokasi:
+    desa, kec = [x.strip() for x in lokasi.split(",")]
+    kode, nama_wilayah = cari_kode_wilayah(desa, kec)
 
-            # Grafik
-            st.subheader("📊 Grafik Suhu & Curah Hujan")
-            fig_suhu = px.line(df, x="Tanggal", y=["SuhuMin", "SuhuMax"], markers=True, title="Suhu (°C)")
-            fig_hujan = px.bar(df, x="Tanggal", y="CurahHujan(mm)", title="Curah Hujan (mm)")
-            st.plotly_chart(fig_suhu, use_container_width=True)
-            st.plotly_chart(fig_hujan, use_container_width=True)
+if kode:
+    st.success(f"Kode wilayah ditemukan: {kode} ({nama_wilayah})")
 
-            # Warning
-            st.subheader("⚠️ Peringatan Cuaca Buruk")
-            warnings = generate_warning(df)
-            if warnings:
-                for w in warnings:
-                    st.warning(w)
+    # --- 5. Ambil data cuaca dari BMKG ---
+    try:
+        url = f"https://api.bmkg.go.id/publik/prakiraan-cuaca?adm4={kode}"
+        r = requests.get(url, timeout=10)
+        if r.ok:
+            data = r.json()
+            if "data" in data and len(data["data"]) > 0:
+                cuaca = data["data"][0]["cuaca"]
+
+                st.subheader(f"🌦️ Prakiraan Cuaca untuk {nama_wilayah}")
+
+                # --- 6. Weather Card ---
+                for jam in cuaca[:6]:  # tampilkan 6 waktu terdekat
+                    for d in jam:
+                        col1, col2, col3 = st.columns([1, 2, 2])
+                        with col1:
+                            st.image(d["image"], width=60)
+                        with col2:
+                            st.markdown(
+                                f"""
+                                **🕒 {d['local_datetime']}**  
+                                🌡️ {d['t']}°C | 💧 {d['hu']}%  
+                                🌬️ {d['ws']} km/jam ({d['wd']})  
+                                """
+                            )
+                        with col3:
+                            st.write(f"**{d['weather_desc']}**")
+                        st.divider()
             else:
-                st.success("Tidak ada cuaca ekstrem terdeteksi.")
+                st.error("❌ BMKG tidak mengembalikan data prakiraan.")
+        else:
+            st.error("❌ Gagal ambil data dari BMKG.")
+    except Exception as e:
+        st.error(f"⚠️ Error ambil data BMKG: {e}")
+
+else:
+    st.warning("⚠️ Masukkan format: Desa, Kecamatan. Contoh: `Simogirang, Prambon`")
